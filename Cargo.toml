@@ -1,0 +1,7 @@
+[package]
+name = "compiler"
+version = "0.1.0"
+authors = ["Arseniy Seroka <ars.seroka@gmail.com>"]
+
+[dependencies.plex]
+git = "https://github.com/goffrie/plex"
