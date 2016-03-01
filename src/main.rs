@@ -10,17 +10,47 @@ mod lexer {
     use std::fmt::Formatter;
     use std::fmt;
 
-    #[derive(Debug, Clone)]
-    #[derive(PartialEq)]
+    #[derive(PartialEq, Clone, Debug)]
     pub enum Token {
-        EOF,
         Def,
         Extern,
+        Delimiter, // ';' character
+        OpeningParenthesis,
+        ClosingParenthesis,
+        Comma,
         Identifier(String),
-        Number(f32),
+        Number(f64),
+        Operator(String),
 
         Whitespace,
         Comment,
+    }
+
+    // ► The Specials - Too Much Too Young
+
+    lexer! {
+        fn take_token(text: 'a) -> (Token, &'a str); // Token and the rest
+
+        r#"[ \t\r\n]+"# => (Token::Whitespace, text),
+        // "C-style" comments (/* .. */) - can't contain "*/"
+        r#"/[*](~(.*[*]/.*))[*]/"# => (Token::Comment, text),
+        // "C++-style" comments (// ...)
+        r#"//[^\n]*"# => (Token::Comment, text),
+        r#"def"# => (Token::Def, text),
+        r#"extern"# => (Token::Extern, text),
+        r#"[a-zA-Z_][a-zA-Z0-9_]*"# => (Token::Identifier(text.to_owned()), text),
+        r#"[0-9.]+"# => {
+            (if let Ok(i) = text.parse() {
+                Token::Number(i)
+            } else {
+                panic!("float {} is out of range", text)
+            }, text)
+        },
+        r#"\("# => (Token::OpeningParenthesis, text),
+        r#"\)"# => (Token::ClosingParenthesis, text),
+        r#";"# => (Token::Delimiter, text),
+        r#","# => (Token::Comma, text),
+        r#"[\+\-\*\/]+"# => (Token::Operator(text.to_owned()), text),
     }
 
     impl Token {
@@ -34,7 +64,7 @@ mod lexer {
     }
 
     /// The Lexer
-    #[derive(Debug)]
+    #[derive(PartialEq, Clone, Debug, Copy)]
     pub struct Lexer<'a> {
         source: &'a str,
         remaining: &'a str,
@@ -68,26 +98,6 @@ mod lexer {
                 }
             }
         }
-    }
-
-    lexer! {
-        fn take_token(text: 'a) -> (Token, &'a str); // Token and the rest
-
-        r#"[ \t\r\n]+"# => (Token::Whitespace, text),
-        // "C-style" comments (/* .. */) - can't contain "*/"
-        r#"/[*](~(.*[*]/.*))[*]/"# => (Token::Comment, text),
-        // "C++-style" comments (// ...)
-        r#"//[^\n]*"# => (Token::Comment, text),
-        r#"def"# => (Token::Def, text),
-        r#"extern"# => (Token::Extern, text),
-        r#"[a-zA-Z_][a-zA-Z0-9_]*"# => (Token::Identifier(text.to_owned()), text),
-        r#"[0-9.]+"# => {
-            (if let Ok(i) = text.parse() {
-                Token::Number(i)
-            } else {
-                panic!("float {} is out of range", text)
-            }, text)
-        },
     }
 
     /// A structure for grouping byte offset of text spans.
@@ -128,7 +138,6 @@ mod lexer {
         }
     }
 
-
     impl Display for TextSpan {
         fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
             write!(f, "[{}, {})", self.low, self.high)
@@ -136,11 +145,192 @@ mod lexer {
     }
 }
 
+mod ast {
+    use std::collections::HashMap;
+
+    use lexer::*;
+
+    pub use self::ASTNode::{ExternNode, FunctionNode};
+    pub use self::Expression::{LiteralExpr, VariableExpr, BinaryExpr, CallExpr};
+
+    pub struct Program {
+        pub astnodes: Vec<ASTNode>,
+    }
+
+    #[derive(PartialEq, Clone, Debug)]
+    pub enum ASTNode {
+        ExternNode(Prototype),
+        FunctionNode(Function),
+    }
+
+    #[derive(PartialEq, Clone, Debug)]
+    pub struct Function {
+        pub prototype: Prototype,
+        pub body: Expression,
+    }
+
+    #[derive(PartialEq, Clone, Debug)]
+    pub struct Prototype {
+        pub name: String,
+        pub args: Vec<String>,
+    }
+
+    #[derive(PartialEq, Clone, Debug)]
+    pub enum Expression {
+        LiteralExpr(f64),
+        VariableExpr(String),
+        BinaryExpr(String, Box<Expression>, Box<Expression>),
+        CallExpr(String, Vec<Expression>),
+    }
+}
+
+mod parser {
+    // Grammar:
+    //
+    // program : [[statement | expression] Delimiter ?]*;
+    // statement : [declaration | definition];
+    // declaration : Extern prototype;
+    // definition : Def prototype expression;
+    // prototype : Identifier OpeningParenthesis [Identifier Comma ?]* ClosingParenthesis;
+    // expression : [primary_expr (Operator primary_expr)*];
+    // primary_expr : [Identifier | Number | call_expr | parenthesis_expr];
+    // call_expr : Identifier OpeningParenthesis [expression Comma ?]* ClosingParenthesis;
+    // parenthesis_expr: OpeningParenthesis expression ClosingParenthesis;
+    //
+
+    use ast::*;
+    use lexer::*;
+
+    use lexer::Token::*;
+
+    parser! {
+        fn parse_(Token, TextSpan);
+
+        // Ignore spans
+        (a, b) {
+            TextSpan::merge(a, b)
+        }
+
+        program: Vec<ASTNode> {
+            => vec![],
+            stex[e] rest[mut p] => {
+                p.push(e);
+                p
+            },
+        }
+
+        stex: ASTNode {
+            statement[e] => e,
+            expression[e] => e
+        }
+        
+        rest: Vec<ASTNode> {
+            program[p] => {
+                p
+            },
+            Delimiter program[p] => {
+                p
+            },
+        }
+        
+        statement: ASTNode {
+            declaration[e] => {
+                e
+            },
+            definition[e] => {
+                e
+            }
+        }
+        
+        declaration: ASTNode {
+            Extern prototype[p] => {
+                ExternNode(p)
+            },
+        }
+
+        definition: ASTNode {
+            Def prototype[p] expr[e] => {
+                FunctionNode(Function {
+                    prototype: p,
+                    body: e,
+                })
+            }
+        }
+
+        prototype: Prototype {
+            Identifier(id) OpeningParenthesis arguments[a] ClosingParenthesis => Prototype {
+                name: id,
+                args: a,
+            }
+        }
+
+        arguments: Vec<String> {
+            => vec![],
+            Identifier(id) extra_args[mut a] => {
+                a.push(id);
+                a
+            }
+        }
+
+        extra_args: Vec<String> {
+            Comma arguments[a] => {
+                a
+            },
+            arguments[a] => {
+                a
+            }
+        }
+
+        primary_expression: Expression {
+           Number(i) => LiteralExpr(i)
+        }
+
+        expression: ASTNode {
+            primary_expression[e] => {
+                let prototype = Prototype {name: "".to_string(), args: vec![]};
+                FunctionNode (Function {
+                    prototype: prototype,
+                    body: e
+                })
+            }
+        }
+        
+        expr: Expression {
+            => LiteralExpr(0.0)
+        }
+    }
+
+    pub fn parse<I: Iterator<Item = (Token, TextSpan)>>
+        (i: I)
+         -> Result<Vec<ASTNode>, (Option<(Token, TextSpan)>, &'static str)> {
+        parse_(i)
+    }
+}
+
 fn main() {
     let mut s = String::new();
     std::io::stdin().read_to_string(&mut s).unwrap();
-    let mut result = lexer::Lexer::new(&s);
-    for i in result {
+    let lexer = lexer::Lexer::new(&s);
+    for i in lexer {
         println!("{:?}", i);
+    }
+    println!("{:?}", parser::parse(lexer));
+}
+
+#[test]
+fn test_parser() {
+    use parser::*;
+    use ast::*;
+    use lexer::*;
+    let tests = vec![
+        ("extern sin();", vec![ExternNode(Prototype{name:"sin".to_string(), args:vec![]})]),
+        ("", vec![]),
+        ("def foo(x y x);", vec![FunctionNode(Function { prototype: Prototype { name: "foo".to_string(), args: vec!["x".to_string(), "y".to_string(), "x".to_string()] }, body: LiteralExpr(0.0) })]),
+    ];
+
+    for tc in tests {
+        let parsed = lexer::Lexer::new(tc.0);
+        let r = parser::parse(parsed).unwrap();
+        assert_eq!(tc.1, r);
     }
 }
