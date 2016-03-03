@@ -281,12 +281,8 @@ mod parser {
             }
         }
 
-        primary_expression: Expression {
-           Number(i) => LiteralExpr(i)
-        }
-
         expression: ASTNode {
-            primary_expression[e] => {
+            expr[e] => {
                 let prototype = Prototype {name: "".to_string(), args: vec![]};
                 FunctionNode (Function {
                     prototype: prototype,
@@ -294,9 +290,43 @@ mod parser {
                 })
             }
         }
+
+        primary_expression: Expression {
+            #[no_reduce(OpeningParenthesis)]
+            Identifier(id) => VariableExpr(id),
+            Number(val) => LiteralExpr(val),
+            Identifier(id) OpeningParenthesis many_exprs[args] ClosingParenthesis => {
+                CallExpr(id, args)
+            },
+            parenthesis_expr[e] => e,
+        }
+
+        many_exprs: Vec<Expression> {
+            => vec![],
+            expr[e] extra_exprs[mut exprs] => {
+                exprs.push(e);
+                exprs
+            }
+        }
+        extra_exprs: Vec<Expression> {
+            Comma many_exprs[a] => {
+                a
+            },
+            many_exprs[a] => {
+                a
+            }
+        }
+
+        parenthesis_expr: Expression {
+            OpeningParenthesis expr[e] ClosingParenthesis => e
+        }
         
         expr: Expression {
-            => LiteralExpr(0.0)
+           primary_expression[e] binary_expr[st] => e
+        }
+
+        binary_expr: Expression {
+            Operator(op) primary_expression[e] => e
         }
     }
 
