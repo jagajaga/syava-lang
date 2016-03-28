@@ -1,4 +1,5 @@
 #![allow(match_of_unit_variant_via_paren_dotdot)]
+#![feature(box_syntax)]
 
 #![feature(plugin)]
 #![plugin(plex)]
@@ -308,6 +309,7 @@ mod parser {
                 exprs
             }
         }
+
         extra_exprs: Vec<Expression> {
             Comma many_exprs[a] => {
                 a
@@ -322,11 +324,26 @@ mod parser {
         }
         
         expr: Expression {
-           primary_expression[e] binary_expr[st] => e
+           primary_expression[e] => e,
+           primary_expression[e] binary_expr[st] => {
+               BinaryExpr(st.0, box e, box st.1)
+           }
         }
 
-        binary_expr: Expression {
-            Operator(op) primary_expression[e] => e
+        binary_expr: (String, Expression) {
+            Operator(op) primary_expression[e] extra_binary_exprs[ebe] => {
+                match ebe {
+                    Some((a, b)) => (op, BinaryExpr(a, box e, box b)),
+                    None => (op, e)
+                }
+            },
+        }
+
+        extra_binary_exprs: Option<(String, Expression)> {
+            => None,
+            Operator(op) expr[e] => {
+                Some((op, e))
+            },
         }
     }
 
