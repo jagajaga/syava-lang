@@ -51,17 +51,7 @@ mod lexer {
         r#"\)"# => (Token::ClosingParenthesis, text),
         r#";"# => (Token::Delimiter, text),
         r#","# => (Token::Comma, text),
-        r#"[\+\-\*\/]+"# => (Token::Operator(text.to_owned()), text),
-    }
-
-    impl Token {
-        pub fn contents(&self) -> Option<&str> {
-            let s = match *self {
-                Token::Identifier(ref s) => s,
-                _ => return None,
-            };
-            Some(s)
-        }
+        r#"[\+\-\*\/^:<>]+"# => (Token::Operator(text.to_owned()), text),
     }
 
     /// The Lexer
@@ -147,16 +137,9 @@ mod lexer {
 }
 
 mod ast {
-    use std::collections::HashMap;
-
-    use lexer::*;
-
     pub use self::ASTNode::{ExternNode, FunctionNode};
-    pub use self::Expression::{LiteralExpr, VariableExpr, BinaryExpr, CallExpr};
-
-    pub struct Program {
-        pub astnodes: Vec<ASTNode>,
-    }
+    pub use self::Expression::{LiteralExpr, VariableExpr, BinaryExpr, CallExpr, UnprocessedExpr,
+                               BinaryOperator};
 
     #[derive(PartialEq, Clone, Debug)]
     pub enum ASTNode {
@@ -182,6 +165,8 @@ mod ast {
         VariableExpr(String),
         BinaryExpr(String, Box<Expression>, Box<Expression>),
         CallExpr(String, Vec<Expression>),
+        UnprocessedExpr(Vec<Expression>),
+        BinaryOperator(String),
     }
 }
 
@@ -199,10 +184,26 @@ mod parser {
     // parenthesis_expr: OpeningParenthesis expression ClosingParenthesis;
     //
 
+    use std::collections::HashMap;
+
     use ast::*;
     use lexer::*;
 
     use lexer::Token::*;
+
+    pub struct ParserSettings {
+        operator_precedence: HashMap<String, i32>,
+    }
+
+    pub fn default_parser_settings() -> ParserSettings {
+        let mut operator_precedence = HashMap::new();
+        operator_precedence.insert("<".to_string(), 10);
+        operator_precedence.insert("+".to_string(), 20);
+        operator_precedence.insert("-".to_string(), 20);
+        operator_precedence.insert("*".to_string(), 40);
+
+        ParserSettings { operator_precedence: operator_precedence }
+    }
 
     parser! {
         fn parse_(Token, TextSpan);
@@ -215,7 +216,7 @@ mod parser {
         program: Vec<ASTNode> {
             => vec![],
             stex[e] rest[mut p] => {
-                p.push(e);
+                p.insert(0, e);
                 p
             },
         }
@@ -268,7 +269,7 @@ mod parser {
         arguments: Vec<String> {
             => vec![],
             Identifier(id) extra_args[mut a] => {
-                a.push(id);
+                a.insert(0, id);
                 a
             }
         }
@@ -305,7 +306,7 @@ mod parser {
         many_exprs: Vec<Expression> {
             => vec![],
             expr[e] extra_exprs[mut exprs] => {
-                exprs.push(e);
+                exprs.insert(0, e);
                 exprs
             }
         }
@@ -325,32 +326,62 @@ mod parser {
         
         expr: Expression {
            primary_expression[e] => e,
-           primary_expression[e] binary_expr[st] => {
-               BinaryExpr(st.0, box e, box st.1)
+           primary_expression[e] binary_expr[mut st] => {
+               st.insert(0, e);
+               UnprocessedExpr(st)
            }
         }
 
-        binary_expr: (String, Expression) {
-            Operator(op) primary_expression[e] extra_binary_exprs[ebe] => {
-                match ebe {
-                    Some((a, b)) => (op, BinaryExpr(a, box e, box b)),
-                    None => (op, e)
-                }
+        binary_expr: Vec<Expression> {
+            Operator(op) primary_expression[e] extra_binary_exprs[mut ebe] => {
+                ebe.insert(0, e);
+                ebe.insert(0, BinaryOperator(op));
+                ebe
             },
         }
 
-        extra_binary_exprs: Option<(String, Expression)> {
-            => None,
-            Operator(op) expr[e] => {
-                Some((op, e))
+        extra_binary_exprs: Vec<Expression> {
+            => vec![],
+            Operator(op) primary_expression[e] extra_binary_exprs[mut ebe] => {
+                ebe.insert(0, e);
+                ebe.insert(0, BinaryOperator(op));
+                ebe
             },
         }
     }
 
+    fn sh_yard(ast: &Vec<Expression>, operator_precedence: &ParserSettings) -> Expression {
+//TODO
+        BinaryExpr("+".to_string(), box LiteralExpr(1.0), box LiteralExpr(1.0))
+    }
+
+    fn shunting_yard(ast: &Vec<ASTNode>, operator_precedence: &ParserSettings) -> Vec<ASTNode> {
+        ast.iter()
+           .map(|x| {
+               match *x {
+                   FunctionNode(ref f) => {
+                       FunctionNode(Function {
+                           prototype: f.prototype.clone(),
+                           body: match f.body {
+                               UnprocessedExpr(ref ue) => sh_yard(ue, operator_precedence),
+                               _ => f.body.clone(),
+                           },
+                       })
+                   }
+                   ref e => e.clone(),
+               }
+           })
+           .collect()
+    }
+
     pub fn parse<I: Iterator<Item = (Token, TextSpan)>>
-        (i: I)
+        (i: I,
+         operator_precedence: &ParserSettings)
          -> Result<Vec<ASTNode>, (Option<(Token, TextSpan)>, &'static str)> {
-        parse_(i)
+        match parse_(i) {
+            Ok(a) => Ok(shunting_yard(&a, operator_precedence)),
+            e => e,
+        }
     }
 }
 
@@ -361,7 +392,9 @@ fn main() {
     for i in lexer {
         println!("{:?}", i);
     }
-    println!("{:?}", parser::parse(lexer));
+    let mut parser_settings = parser::default_parser_settings();
+    let parse_result: Vec<ast::ASTNode> = parser::parse(lexer, &parser_settings).unwrap();
+    println!("{:?}", parse_result);
 }
 
 #[test]
