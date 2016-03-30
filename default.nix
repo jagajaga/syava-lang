@@ -1,6 +1,6 @@
 { pkgs ? (import <nixpkgs> {}).pkgs }:
 
 with pkgs;
-with rustPlatform;
+with rustUnstable;
 
-import ./project.nix {inherit rustPlatform;}
+import ./project.nix {inherit rustUnstable; inherit pkgs;}
