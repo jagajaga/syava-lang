@@ -350,25 +350,25 @@ mod parser {
         }
     }
 
-    fn sh_yard(ast: &Vec<Expression>, operator_precedence: &ParserSettings) -> Expression {
-//TODO
+    fn sh_yard(ast: Vec<Expression>, operator_precedence: &ParserSettings) -> Expression {
+        // TODO
         BinaryExpr("+".to_string(), box LiteralExpr(1.0), box LiteralExpr(1.0))
     }
 
-    fn shunting_yard(ast: &Vec<ASTNode>, operator_precedence: &ParserSettings) -> Vec<ASTNode> {
-        ast.iter()
+    fn shunting_yard(ast: Vec<ASTNode>, operator_precedence: &ParserSettings) -> Vec<ASTNode> {
+        ast.into_iter()
            .map(|x| {
-               match *x {
-                   FunctionNode(ref f) => {
+               match x {
+                   FunctionNode(f) => {
                        FunctionNode(Function {
-                           prototype: f.prototype.clone(),
+                           prototype: f.prototype,
                            body: match f.body {
-                               UnprocessedExpr(ref ue) => sh_yard(ue, operator_precedence),
-                               _ => f.body.clone(),
+                               UnprocessedExpr(ue) => sh_yard(ue, operator_precedence),
+                               _ => f.body,
                            },
                        })
                    }
-                   ref e => e.clone(),
+                   e => e,
                }
            })
            .collect()
@@ -379,7 +379,7 @@ mod parser {
          operator_precedence: &ParserSettings)
          -> Result<Vec<ASTNode>, (Option<(Token, TextSpan)>, &'static str)> {
         match parse_(i) {
-            Ok(a) => Ok(shunting_yard(&a, operator_precedence)),
+            Ok(a) => Ok(shunting_yard(a, operator_precedence)),
             e => e,
         }
     }
