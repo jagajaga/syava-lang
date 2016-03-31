@@ -1,0 +1,15 @@
+// returns 89
+fn main() -> u32 {
+    fib(10)
+}
+
+//returns the nth fibonacci number
+fn fib(n: u32) -> u32 {
+    let ret: u32 = if n < 2u32 {
+        return 1
+    } else {
+        fib(n - 1u32) + fib(n - 2u32)
+    };
+
+    ret
+}
