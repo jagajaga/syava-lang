@@ -195,7 +195,9 @@ impl expr {
             }
             expr::Return(expr) => {
                 let ret = try!(expr.translate(ty.clone(), function, locals, block, ast));
-                block.ret(ret);
+                if block.is_live() {
+                    block.ret(ret);
+                }
                 match ty {
                     ty::Generic => unimplemented!(),
                     ty => Ok(value::undef(ty)),
