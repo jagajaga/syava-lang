@@ -19,8 +19,6 @@ pub enum stmt {
         ty: ty,
         value: Box<expr>,
     },
-    Stmt(expr),
-    // can only be the last statement in a body
     Expr(expr),
 }
 
@@ -214,7 +212,7 @@ pub enum item {
         name: String,
         ret: ty,
         args: Vec<(String, ty)>,
-        body: Vec<stmt>,
+        body: (Vec<stmt>, Option<expr>),
     }
 }
 
@@ -265,12 +263,11 @@ impl function {
         })
     }
 
-    fn add_body(&self, body: Vec<stmt>, ast: &ast) -> Result<(), ast_error> {
+    fn add_body(&self, body: (Vec<stmt>, Option<expr>), ast: &ast) -> Result<(), ast_error> {
         let mut block = block::new(self, "entry");
         let mut locals = HashMap::new();
 
-        let mut body = body.into_iter();
-        while let Some(st) = body.next()  {
+        for st in body.0 {
             match st {
                 stmt::Let {
                     name,
@@ -280,23 +277,24 @@ impl function {
                     let local = try!(value.translate(ty, self, &locals, &mut block, ast));
                     locals.insert(name, local);
                 }
-                stmt::Stmt(e) => {
+                stmt::Expr(e) => {
                     try!(e.translate(self.ret_ty.clone(),
                         self, &locals, &mut block, ast));
                     if !block.is_live() {
                         break;
                     }
                 }
-                stmt::Expr(e) => {
-                    assert!(body.next().is_none());
-                    let ret = try!(e.translate(self.ret_ty.clone(),
-                        self, &locals, &mut block, ast));
-                    if block.is_live() {
-                        block.ret(ret);
-                    }
-                }
             }
         }
+
+        if let Some(e) = body.1 {
+            let ret = try!(e.translate(self.ret_ty.clone(),
+                self, &locals, &mut block, ast));
+            if block.is_live() {
+                block.ret(ret);
+            }
+        }
+
         if block.is_live() {
             if self.ret_ty == ty::Unit {
                 block.ret(value::unit_literal(ty::Unit).unwrap())
@@ -344,7 +342,7 @@ pub enum ast_error {
 
 pub struct ast {
     functions: HashMap<String, function>,
-    function_blocks: HashMap<String, Vec<stmt>>,
+    function_blocks: HashMap<String, (Vec<stmt>, Option<expr>)>,
     module: module,
 }
 

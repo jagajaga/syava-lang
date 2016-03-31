@@ -1,6 +1,7 @@
 use std::str;
 use trans::{expr, stmt, item};
 use ty::ty;
+use either::{self, Left, Right};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum token {
@@ -368,7 +369,7 @@ impl<'src> lexer<'src> {
             }
 
             c if Self::is_start_of_ident(c) => {
-                let ident = self.ident(first);
+                let ident = self.ident(c);
                 match &ident[..] {
                     "fn" => return Ok(token::KeywordFn),
                     "return" => return Ok(token::KeywordReturn),
@@ -729,13 +730,13 @@ impl<'src> parser<'src> {
         }
     }
 
-    fn parse_stmt(&mut self) -> Result<Option<stmt>, parser_error> {
+    fn parse_stmt(&mut self) -> Result<Option<either<stmt, expr>>, parser_error> {
         match try!(self.maybe_parse_expr()) {
             Some(e) => {
                 if let Some(_) = try!(self.maybe_eat(token::Semicolon, line!())) {
-                    Ok(Some(stmt::Stmt(e)))
+                    Ok(Some(Left(stmt::Expr(e))))
                 } else {
-                    Ok(Some(stmt::Expr(e)))
+                    Ok(Some(Right(e)))
                 }
             }
             None => {
@@ -747,11 +748,11 @@ impl<'src> parser<'src> {
                         try!(self.eat(token::Equals, line!()));
                         let expr = try!(self.parse_expr(line!()));
                         try!(self.eat(token::Semicolon, line!()));
-                        Ok(Some(stmt::Let {
+                        Ok(Some(Left(stmt::Let {
                             name: name,
                             ty: ty,
                             value: Box::new(expr),
-                        }))
+                        })))
                     }
                     token::CloseBrace => Ok(None),
                     tok => unreachable!("{:?}", tok),
@@ -828,21 +829,24 @@ impl<'src> parser<'src> {
         try!(self.eat(token::OpenBrace, line!()));
 
         let mut body = Vec::new();
-        let mut last = false;
+        let mut expr = None;
         while let Some(st) = try!(self.parse_stmt()) {
-            if last {
-                return Err(parser_error::ExpectedSemicolon {
-                    line: self.line(),
-                    compiler: fl!(),
-                })
-            } else {
-                if let stmt::Expr(_) = st {
-                    last = true;
+            match st {
+                Left(st) => body.push(st),
+                Right(e) => {
+                    expr = Some(e);
+                    if let Some(_) = try!(self.parse_stmt()) {
+                        return Err(parser_error::ExpectedSemicolon {
+                            line: self.line(),
+                            compiler: fl!(),
+                        })
+                    } else {
+                        break;
+                    }
                 }
-                body.push(st);
             }
         }
 
-        Ok(item::Function { name: name, ret: ret_ty, args: args, body: body })
+        Ok(item::Function { name: name, ret: ret_ty, args: args, body: (body, expr) })
     }
 }

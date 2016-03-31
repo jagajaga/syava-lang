@@ -12,6 +12,11 @@ macro_rules! fl {
     () => ((file!(), line!()))
 }
 
+enum either<L, R> {
+    Left(L),
+    Right(R),
+}
+
 mod parse;
 mod trans;
 mod ty;
