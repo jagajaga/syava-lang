@@ -113,7 +113,7 @@ impl operand {
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
             },
-            ty: ty::Infer(0),
+            ty: ty::Infer(None),
         }
     }
 }
@@ -749,8 +749,11 @@ impl<'src> parser<'src> {
                 match try!(self.eat_ty(token_type::Statement, line!())) {
                     token::KeywordLet => {
                         let name = try!(self.parse_ident(line!()));
-                        try!(self.eat(token::Colon, line!()));
-                        let ty = try!(self.parse_ty(line!()));
+                        let ty = if let Some(_) = try!(self.maybe_eat(token::Colon, line!())) {
+                            try!(self.parse_ty(line!()))
+                        } else {
+                            ty::Infer(None)
+                        };
                         try!(self.eat(token::Equals, line!()));
                         let expr = try!(self.parse_expr(line!()));
                         try!(self.eat(token::Semicolon, line!()));

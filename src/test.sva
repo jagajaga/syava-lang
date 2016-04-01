@@ -1,6 +1,7 @@
 // returns 89
 fn main() -> u32 {
-    10
+    let x = 10;
+    x
 }
 
 /*

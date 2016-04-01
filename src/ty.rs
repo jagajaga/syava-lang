@@ -12,8 +12,8 @@ pub enum ty {
     Unit,
     Diverging,
 
-    Infer(u32),
-    InferInt(u32),
+    Infer(Option<u32>),
+    InferInt(Option<u32>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -70,6 +70,15 @@ impl ty {
             ty::Diverging | ty::Infer(_) | ty::InferInt(_) => false,
         }
     }
+
+    pub fn generate_inference_id(&mut self, uf: &mut union_find) {
+        match *self {
+            ty::Infer(ref mut inner @ None) | ty::InferInt(ref mut inner @ None) => {
+                *inner = Some(uf.next_id());
+            }
+            _ => {}
+        }
+    }
 }
 
 impl int {
@@ -93,16 +102,17 @@ impl int {
 }
 
 pub struct union_find {
-    _hidden: (),
+    current_id: u32,
 }
 
 impl union_find {
     pub fn new() -> union_find {
         union_find {
-            _hidden: (),
+            current_id: 0,
         }
     }
 
+    // very C++ right now
     pub fn unify(&mut self, a: &ty, b: &ty) -> Result<ty, ()> {
         if a == b {
             return Ok(a.clone());
@@ -151,5 +161,14 @@ impl union_find {
         }
 
         Err(())
+    }
+
+    fn next_id(&mut self) -> u32 {
+        if self.current_id == u32::max_value() {
+            panic!()
+        } else {
+            self.current_id += 1;
+            self.current_id - 1
+        }
     }
 }

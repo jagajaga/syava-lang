@@ -197,20 +197,65 @@ impl expr {
         }
     }
 
+    fn typeck(&mut self, to_unify: &ty, uf: &mut union_find, variables: &HashMap<String, ty>)
+            -> Result<ty, ast_error> {
+        self.ty.generate_inference_id(uf);
+        match self.kind {
+            expr_kind::IntLiteral | expr_kind::BoolLiteral | expr_kind::UnitLiteral => {
+                match uf.unify(&self.ty, to_unify) {
+                    Ok(ty) => {
+                        self.ty = ty.clone();
+                        Ok(ty)
+                    }
+                    Err(()) => {
+                        Err(ast_error::CouldNotUnify {
+                            first: self.ty.clone(),
+                            second: to_unify.clone(),
+                            compiler: fl!(),
+                        })
+                    }
+                }
+            }
+            expr_kind::Variable(ref name) => {
+                if let Some(ty) = variables.get(name) {
+                    match uf.unify(ty, to_unify) {
+                        Ok(ty) => {
+                            self.ty = ty.clone();
+                            Ok(ty)
+                        }
+                        Err(()) => {
+                            Err(ast_error::CouldNotUnify {
+                                first: ty.clone(),
+                                second: to_unify.clone(),
+                                compiler: fl!(),
+                            })
+                        }
+                    }
+                } else {
+                    Err(ast_error::UndefinedVariableName {
+                        name: name.clone(),
+                        function: "".to_owned() // TODO: fix this
+                    })
+                }
+            }
+            _ => unimplemented!(),
+        }
+    }
+
     pub fn call(callee: String, args: Vec<expr>, ty: Option<ty>) -> expr {
         expr {
             kind: expr_kind::Call {
                 callee: callee,
                 args: args,
             },
-            ty: ty.unwrap_or(ty::Infer(0)),
+            ty: ty.unwrap_or(ty::Infer(None)),
         }
     }
 
     pub fn var(name: String, ty: Option<ty>) -> expr {
         expr {
             kind: expr_kind::Variable(name),
-            ty: ty.unwrap_or(ty::Infer(0)),
+            ty: ty.unwrap_or(ty::Infer(None)),
         }
     }
 
@@ -221,14 +266,14 @@ impl expr {
                 then_value: Box::new(then),
                 else_value: Box::new(else_),
             },
-            ty: ty.unwrap_or(ty::Infer(0)),
+            ty: ty.unwrap_or(ty::Infer(None)),
         }
     }
 
     pub fn int_lit(value: u64, ty: Option<ty>) -> expr {
         expr {
             kind: expr_kind::IntLiteral(value),
-            ty: ty.unwrap_or(ty::InferInt(0)),
+            ty: ty.unwrap_or(ty::InferInt(None)),
         }
     }
 
@@ -249,21 +294,21 @@ impl expr {
     pub fn neg(inner: expr, ty: Option<ty>) -> expr {
         expr {
             kind: expr_kind::Minus(Box::new(inner)),
-            ty: ty.unwrap_or(ty::Infer(0)),
+            ty: ty.unwrap_or(ty::Infer(None)),
         }
     }
 
     pub fn pos(inner: expr, ty: Option<ty>) -> expr {
         expr {
             kind: expr_kind::Plus(Box::new(inner)),
-            ty: ty.unwrap_or(ty::Infer(0)),
+            ty: ty.unwrap_or(ty::Infer(None)),
         }
     }
 
     pub fn not(inner: expr, ty: Option<ty>) -> expr {
         expr {
             kind: expr_kind::Not(Box::new(inner)),
-            ty: ty.unwrap_or(ty::Infer(0)),
+            ty: ty.unwrap_or(ty::Infer(None)),
         }
     }
 
@@ -455,38 +500,27 @@ impl ast {
                 Some(f) => f.output.clone(),
                 None => panic!("ICE: block without an associated function: {}", name),
             };
-            /*
-            let mut vars: Vec<String, ty> = Vec::new();
+            let mut uf = union_find::new();
+            let mut vars = HashMap::<String, ty>::new();
             for stmt in &mut block.0 {
-                match stmt {
+                match *stmt {
                     stmt::Let {
                         ref name,
                         ref mut ty,
                         ref mut value,
                     } => {
-                        vars.push((name.to_owned(), ty));
-                    }
-                    stmt::Expr(e) => {
-                    }
+                        ty.generate_inference_id(&mut uf);
+                        let actual_ty = try!(value.typeck(ty, &mut uf, &vars));
+                        *ty = actual_ty.clone();
+                        vars.insert(name.to_owned(), actual_ty);
+                    },
+                    _ => unimplemented!(),
                 }
             }
-            */
-            let mut uf = union_find::new();
             match block.1 {
                 Some(ref mut expr) => {
-                    match uf.unify(&expr.ty, &expected_ty) {
-                        Ok(ty) => {
-                            assert!(ty.is_final_type());
-                            expr.ty = ty;
-                        }
-                        Err(()) => {
-                            return Err(ast_error::CouldNotUnify {
-                                first: expr.ty.clone(),
-                                second: expected_ty,
-                                compiler: fl!(),
-                            })
-                        }
-                    }
+                    let ty = try!(expr.typeck(&expected_ty, &mut uf, &vars));
+                    assert!(ty == expected_ty);
                 },
                 None => {
                     if expected_ty != ty::Unit {
