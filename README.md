@@ -19,7 +19,7 @@ cargo build
 ### Testing
 
 ```
-cargo test
+RUST_TEST_THREADS=1 cargo test
 ```
 
 If you want manual testing run

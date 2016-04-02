@@ -185,7 +185,7 @@ impl function {
                 params_ty.len() as u32, false as LLVMBool);
 
                 LLVMAddFunction(module, CString::new(name.clone())
-                                .expect("name should not have a nul in it").as_ptr(), function_ty)
+                                .expect("name should not have a nul in it").into_raw(), function_ty)
             };
 
             for (arg_name, arg_ty) in args {
@@ -438,7 +438,7 @@ impl module {
     fn new(name: &str) -> module {
         unsafe {
             let raw = LLVMModuleCreateWithName(CString::new(name)
-                                               .expect("passed a string with a nul to module::new").as_ptr());
+                                               .expect("passed a string with a nul to module::new").into_raw());
 
             module {
                 raw: raw
