@@ -396,6 +396,7 @@ impl<'src> lexer<'src> {
 }
 
 #[derive(Debug)]
+#[derive(PartialEq)]
 pub enum parser_error {
     ExpectedEof,
 
