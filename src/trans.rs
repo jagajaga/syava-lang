@@ -197,40 +197,29 @@ impl expr {
         }
     }
 
-    fn typeck(&mut self, to_unify: &ty, uf: &mut union_find, variables: &HashMap<String, ty>)
-            -> Result<ty, ast_error> {
+    fn unify_type(&mut self, to_unify: ty, uf: &mut union_find, variables: &HashMap<String, ty>)
+            -> Result<(), ast_error> {
         self.ty.generate_inference_id(uf);
         match self.kind {
             expr_kind::IntLiteral | expr_kind::BoolLiteral | expr_kind::UnitLiteral => {
-                match uf.unify(&self.ty, to_unify) {
-                    Ok(ty) => {
-                        self.ty = ty.clone();
-                        Ok(ty)
+                uf.unify(self.ty, to_unify).map_err(|()|
+                    ast_error::CouldNotUnify {
+                        first: self.ty,
+                        second: to_unify,
+                        compiler: fl!(),
                     }
-                    Err(()) => {
-                        Err(ast_error::CouldNotUnify {
-                            first: self.ty.clone(),
-                            second: to_unify.clone(),
-                            compiler: fl!(),
-                        })
-                    }
-                }
+                )
             }
             expr_kind::Variable(ref name) => {
                 if let Some(ty) = variables.get(name) {
-                    match uf.unify(ty, to_unify) {
-                        Ok(ty) => {
-                            self.ty = ty.clone();
-                            Ok(ty)
+                    self.ty = *ty;
+                    uf.unify(*ty, to_unify).map_err(|()|
+                        ast_error::CouldNotUnify {
+                            first: *ty,
+                            second: to_unify,
+                            compiler: fl!(),
                         }
-                        Err(()) => {
-                            Err(ast_error::CouldNotUnify {
-                                first: ty.clone(),
-                                second: to_unify.clone(),
-                                compiler: fl!(),
-                            })
-                        }
-                    }
+                    )
                 } else {
                     Err(ast_error::UndefinedVariableName {
                         name: name.clone(),
@@ -239,6 +228,22 @@ impl expr {
                 }
             }
             _ => unimplemented!(),
+        }
+    }
+
+    fn finalize_type(&mut self, uf: &mut union_find) -> Result<(), ast_error> {
+        match self.kind {
+            expr_kind::IntLiteral | expr_kind::BoolLiteral | expr_kind::UnitLiteral |
+                expr_kind::Variable(_) => {
+                self.ty = match uf.actual_ty(self.ty) {
+                    Some(t) => t,
+                    None => return Err(ast_error::NoActualType {
+                        compiler: fl!(),
+                    })
+                };
+                Ok(())
+            }
+            _ => unimplemented!()
         }
     }
 
@@ -447,6 +452,9 @@ pub enum ast_error {
         second: ty,
         compiler: (&'static str, u32),
     },
+    NoActualType {
+        compiler:  (&'static str, u32),
+    },
     UnknownType(&'static str),
 }
 
@@ -510,17 +518,21 @@ impl ast {
                         ref mut value,
                     } => {
                         ty.generate_inference_id(&mut uf);
-                        let actual_ty = try!(value.typeck(ty, &mut uf, &vars));
-                        *ty = actual_ty.clone();
-                        vars.insert(name.to_owned(), actual_ty);
+                        try!(value.unify_type(*ty, &mut uf, &vars));
+                        vars.insert(name.to_owned(), *ty);
                     },
                     _ => unimplemented!(),
                 }
             }
             match block.1 {
                 Some(ref mut expr) => {
-                    let ty = try!(expr.typeck(&expected_ty, &mut uf, &vars));
-                    assert!(ty == expected_ty);
+                    try!(expr.unify_type(expected_ty, &mut uf, &vars));
+                    expr.ty = match uf.actual_ty(expr.ty) {
+                        Some(t) => t,
+                        None => return Err(ast_error::NoActualType {
+                            compiler: fl!(),
+                        }),
+                    }
                 },
                 None => {
                     if expected_ty != ty::Unit {
@@ -531,6 +543,24 @@ impl ast {
                         })
                     }
                 },
+            }
+            for stmt in &mut block.0 {
+                match *stmt {
+                    stmt::Let {
+                        ref mut ty,
+                        ref mut value,
+                        ..
+                    } => {
+                        *ty = match uf.actual_ty(*ty) {
+                            Some(t) => t,
+                            None => return Err(ast_error::NoActualType {
+                                compiler: fl!(),
+                            })
+                        };
+                        try!(value.finalize_type(&mut uf));
+                    }
+                    _ => unimplemented!(),
+                }
             }
         }
         Ok(())

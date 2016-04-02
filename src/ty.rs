@@ -4,19 +4,20 @@ use llvm_sys::core::*;
 
 use parse::{parser_error};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ty {
     SInt(int),
     UInt(int),
     Bool,
     Unit,
+
     Diverging,
 
     Infer(Option<u32>),
     InferInt(Option<u32>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum int {
     I32,
 }
@@ -103,70 +104,124 @@ impl int {
 
 pub struct union_find {
     current_id: u32,
+    group_parents: Vec<u32>,
+    parents_ty: Vec<Option<ty>>,
 }
 
 impl union_find {
     pub fn new() -> union_find {
         union_find {
             current_id: 0,
+            group_parents: Vec::new(),
+            parents_ty: Vec::new(),
         }
     }
 
-    // very C++ right now
-    pub fn unify(&mut self, a: &ty, b: &ty) -> Result<ty, ()> {
-        if a == b {
-            return Ok(a.clone());
-        }
+    fn union(&mut self, a: u32, b: u32) {
+        let b = self.find(b) as usize;
+        self.group_parents[b] = self.find(a);
+    }
 
-        if a.is_final_type() {
-            match *b {
-                ty::Diverging => {
-                    return Ok(a.clone()) // not sure about this
+    fn find(&self, mut n: u32) -> u32 {
+        while self.group_parents[n as usize] != n {
+            n = self.group_parents[n as usize];
+        }
+        n
+    }
+
+    pub fn unify(&mut self, a: ty, b: ty) -> Result<(), ()> {
+        let a_actual = self.actual_ty(a);
+        let b_actual = self.actual_ty(b);
+        match (a_actual, b_actual) {
+            (Some(a), Some(b)) => {
+                if a == b {
+                    Ok(())
+                } else {
+                    Err(())
                 }
-                ty::Infer(_id) => {
-                    return Ok(a.clone())
-                }
-                ty::InferInt(_id) => {
-                    match *a {
-                        ty::SInt(_) | ty::UInt(_) => return Ok(a.clone()),
-                        _ => return Err(()),
+            }
+            (None, None) => {
+                match (a, b) {
+                    (ty::Infer(Some(lid)), ty::Infer(Some(rid)))
+                            | (ty::Infer(Some(lid)), ty::InferInt(Some(rid)))
+                            | (ty::InferInt(Some(lid)), ty::Infer(Some(rid)))
+                            | (ty::InferInt(Some(lid)), ty::InferInt(Some(rid))) => {
+                        self.union(lid, rid);
+                        Ok(())
                     }
+                    (l, r) => panic!("actual ty isn't working: {:?}, {:?}", l, r)
                 }
-                ref b if b.is_final_type() => {
-                    return Err(())
+            }
+            (Some(ty), None) => {
+                match b {
+                    ty::Infer(Some(id)) => {
+                        let id = self.find(id) as usize;
+                        self.parents_ty[id] = Some(ty);
+                        Ok(())
+                    }
+                    ty::InferInt(Some(id)) => {
+                        match ty {
+                            ty::UInt(_) | ty::SInt(_) => {
+                                let id = self.find(id) as usize;
+                                self.parents_ty[id] = Some(ty);
+                                Ok(())
+                            }
+                            _ty => {
+                                Err(())
+                            }
+                        }
+                    }
+                    t => panic!("actual ty isn't working: {:?}", t)
                 }
-                _ => unreachable!(),
+            }
+            (None, Some(ty)) => {
+                match a {
+                    ty::Infer(Some(id)) => {
+                        let id = self.find(id) as usize;
+                        self.parents_ty[id] = Some(ty);
+                        Ok(())
+                    }
+                    ty::InferInt(Some(id)) => {
+                        match ty {
+                            ty::UInt(_) | ty::SInt(_) => {
+                                let id = self.find(id) as usize;
+                                self.parents_ty[id] = Some(ty);
+                                Ok(())
+                            }
+                            _ty => {
+                                Err(())
+                            }
+                        }
+                    }
+                    t => panic!("actual ty isn't working: {:?}", t)
+                }
             }
         }
+    }
 
-        if b.is_final_type() {
-            match *a {
-                ty::Diverging => {
-                    return Ok(b.clone()) // not sure about this
-                }
-                ty::Infer(_id) => {
-                    return Ok(b.clone())
-                }
-                ty::InferInt(_id) => {
-                    match *b {
-                        ty::SInt(_) | ty::UInt(_) => return Ok(b.clone()),
-                        _ => return Err(()),
-                    }
-                }
-                ref a if a.is_final_type() => {
-                    return Err(())
-                }
-                _ => unreachable!(),
+    pub fn actual_ty(&self, ty: ty) -> Option<ty> {
+        match ty {
+            ty @ ty::SInt(_) | ty @ ty::UInt(_) | ty @ ty::Bool |
+                    ty @ ty::Unit | ty @ ty::Diverging => {
+                Some(ty)
+            }
+
+            ty::Infer(Some(id)) | ty::InferInt(Some(id)) => {
+                self.parents_ty[self.find(id) as usize]
+            }
+
+            ty::Infer(None) | ty::InferInt(None) => {
+                None
             }
         }
-
-        Err(())
     }
 
     fn next_id(&mut self) -> u32 {
         if self.current_id == u32::max_value() {
             panic!()
         } else {
+            self.group_parents.push(self.current_id);
+            self.parents_ty.push(None);
             self.current_id += 1;
             self.current_id - 1
         }
