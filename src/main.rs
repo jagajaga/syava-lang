@@ -16,7 +16,7 @@ mod parse;
 mod trans;
 mod ty;
 use parse::lexer;
-use trans::ast;
+use trans::{ast};
 
 fn main() {
     use std::env;
@@ -34,5 +34,7 @@ fn main() {
         Ok(ast) => ast,
         Err(e) => panic!("\n{:#?}", e),
     };
-    ast.build().unwrap();
+    println!("{}", ast.build().unwrap());
 }
+
+mod tests;

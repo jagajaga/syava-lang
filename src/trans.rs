@@ -259,6 +259,7 @@ impl function {
 }
 
 #[derive(Debug)]
+#[derive(PartialEq)]
 pub enum ast_error {
     IncorrectNumberOfArguments {
         passed: usize,
@@ -329,7 +330,7 @@ impl ast {
         })
     }
 
-    pub fn build(mut self) -> Result<(), ast_error> {
+    pub fn build(mut self) -> Result<String, ast_error> {
         use std::io::Write;
         assert!(self.function_blocks.len() == self.functions.len());
         for (name, func) in self.functions.iter() {
@@ -376,16 +377,16 @@ impl ast {
                 }
 
                 let res = LLVMRunFunction(engine, main.raw, 0, std::ptr::null_mut());
-                println!("{}", LLVMGenericValueToInt(res, true as LLVMBool) as i32);
-
                 LLVMDisposeGenericValue(res);
                 LLVMDisposeExecutionEngine(engine);
+
+                return Ok(format!("{}", LLVMGenericValueToInt(res, true as LLVMBool) as i32))
             } else {
                 return Err(ast_error::FunctionDoesntExist("main".to_owned()));
             }
         }
 
-        Ok(())
+        Ok(String::from(""))
     }
 
     fn call(&self, ty: ty, callee: &str, builder: LLVMBuilderRef, args: Vec<value>)
