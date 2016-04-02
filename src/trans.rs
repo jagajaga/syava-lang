@@ -57,7 +57,7 @@ pub struct expr {
 impl expr {
     fn translate<'a>(self, function: &'a function, locals: &HashMap<String, value>,
             block: &mut block<'a>, ast: &ast) -> value {
-        assert!(self.ty.is_final_type());
+        assert!(self.ty.is_final_type(), "{:?}", self.ty);
         match self.kind {
             expr_kind::IntLiteral(value) => {
                 value::int_literal(self.ty, value)
@@ -197,15 +197,17 @@ impl expr {
         }
     }
 
-    fn unify_type(&mut self, to_unify: ty, uf: &mut union_find, variables: &HashMap<String, ty>)
+    fn unify_type(&mut self, to_unify: ty, uf: &mut union_find, function: &function,
+        variables: &HashMap<String, ty>, functions: &HashMap<String, function>)
             -> Result<(), ast_error> {
         self.ty.generate_inference_id(uf);
         match self.kind {
-            expr_kind::IntLiteral | expr_kind::BoolLiteral | expr_kind::UnitLiteral => {
+            expr_kind::IntLiteral(_) | expr_kind::BoolLiteral(_) | expr_kind::UnitLiteral => {
                 uf.unify(self.ty, to_unify).map_err(|()|
                     ast_error::CouldNotUnify {
                         first: self.ty,
                         second: to_unify,
+                        function: function.name.clone(),
                         compiler: fl!(),
                     }
                 )
@@ -217,33 +219,213 @@ impl expr {
                         ast_error::CouldNotUnify {
                             first: *ty,
                             second: to_unify,
+                            function: function.name.clone(),
+                            compiler: fl!(),
+                        }
+                    )
+                } else if let Some(&(_, ty)) = function.args.get(name) {
+                    self.ty = ty;
+                    uf.unify(ty, to_unify).map_err(|()|
+                        ast_error::CouldNotUnify {
+                            first: ty,
+                            second: to_unify,
+                            function: function.name.clone(),
                             compiler: fl!(),
                         }
                     )
                 } else {
                     Err(ast_error::UndefinedVariableName {
                         name: name.clone(),
-                        function: "".to_owned() // TODO: fix this
+                        function: function.name.clone(),
                     })
                 }
             }
-            _ => unimplemented!(),
+            expr_kind::Binop {
+                op,
+                ref mut lhs,
+                ref mut rhs,
+            } => {
+                match op {
+                    operand::Mul | operand::Div | operand::Rem | operand::Plus
+                    | operand::Minus | operand::Shl | operand::Shr | operand::And
+                    | operand::Xor | operand::Or => {
+                        let ty = self.ty;
+                        try!(lhs.unify_type(self.ty, uf, function, variables, functions));
+                        try!(rhs.unify_type(lhs.ty, uf, function, variables, functions));
+                        uf.unify(self.ty, to_unify).map_err(|()|
+                            ast_error::CouldNotUnify {
+                                first: ty,
+                                second: to_unify,
+                                function: function.name.clone(),
+                                compiler: fl!(),
+                            }
+                        )
+                    }
+
+                    operand::EqualsEquals | operand::NotEquals | operand::LessThan
+                    | operand::LessThanEquals | operand::GreaterThan
+                    | operand::GreaterThanEquals => {
+                        self.ty = ty::Bool;
+                        rhs.ty.generate_inference_id(uf);
+                        try!(lhs.unify_type(rhs.ty, uf, function, variables, functions));
+                        try!(rhs.unify_type(lhs.ty, uf, function, variables, functions));
+                        uf.unify(self.ty, to_unify).map_err(|()|
+                            ast_error::CouldNotUnify {
+                                first: ty::Bool,
+                                second: to_unify,
+                                function: function.name.clone(),
+                                compiler: fl!(),
+                            }
+                        )
+                    }
+
+                    operand::AndAnd | operand::OrOr => {
+                        self.ty = ty::Bool;
+                        try!(lhs.unify_type(ty::Bool, uf, function, variables, functions));
+                        try!(rhs.unify_type(ty::Bool, uf, function, variables, functions));
+
+                        uf.unify(self.ty, to_unify).map_err(|()|
+                            ast_error::CouldNotUnify {
+                                first: to_unify,
+                                second: ty::Bool,
+                                function: function.name.clone(),
+                                compiler: fl!(),
+                            }
+                        )
+                    }
+
+                    operand::Not => {
+                        panic!("ICE: Not (`!`) is not a binop")
+                    }
+                }
+            }
+            expr_kind::Call {
+                ref callee,
+                ref mut args,
+            } => {
+                match functions.get(callee) {
+                    Some(f) => {
+                        if f.input.len() != args.len() {
+                            return Err(ast_error::IncorrectNumberOfArguments {
+                                passed: args.len(),
+                                expected: f.input.len(),
+                                callee: callee.clone(),
+                                caller: "".to_owned(), // TODO: fix this
+                            })
+                        }
+
+                        for (arg_ty, expr) in f.input.iter().zip(args) {
+                           try!(expr.unify_type(*arg_ty, uf, function, variables, functions));
+                        }
+                        self.ty = f.output;
+                        let ty = self.ty;
+                        uf.unify(self.ty, to_unify).map_err(|()|
+                            ast_error::CouldNotUnify {
+                                first: ty,
+                                second: to_unify,
+                                function: function.name.clone(),
+                                compiler: fl!(),
+                            }
+                        )
+                    }
+                    None => return Err(ast_error::FunctionDoesntExist(callee.clone()))
+                }
+            }
+            expr_kind::If {
+                ref mut condition,
+                ref mut then_value,
+                ref mut else_value,
+            } => {
+                try!(condition.unify_type(ty::Bool, uf, function, variables, functions));
+                try!(then_value.unify_type(to_unify, uf, function, variables, functions));
+                try!(else_value.unify_type(to_unify, uf, function, variables, functions));
+                let ty = self.ty;
+                uf.unify(self.ty, to_unify).map_err(|()|
+                    ast_error::CouldNotUnify {
+                        first: ty,
+                        second: to_unify,
+                        function: function.name.clone(),
+                        compiler: fl!(),
+                    }
+                )
+            }
+            expr_kind::Return(ref mut ret) => {
+                self.ty = ty::Diverging;
+                ret.unify_type(function.output, uf, function, variables, functions)
+            }
+            ref ty => panic!("unimplemented: {:#?}", ty),
         }
     }
 
-    fn finalize_type(&mut self, uf: &mut union_find) -> Result<(), ast_error> {
+    fn finalize_type(&mut self, uf: &mut union_find, function: &function) -> Result<(), ast_error> {
         match self.kind {
-            expr_kind::IntLiteral | expr_kind::BoolLiteral | expr_kind::UnitLiteral |
+            expr_kind::IntLiteral(_) | expr_kind::BoolLiteral(_) | expr_kind::UnitLiteral |
                 expr_kind::Variable(_) => {
                 self.ty = match uf.actual_ty(self.ty) {
                     Some(t) => t,
                     None => return Err(ast_error::NoActualType {
                         compiler: fl!(),
+                        function: function.name.clone(),
                     })
                 };
                 Ok(())
             }
-            _ => unimplemented!()
+            expr_kind::Binop {
+                ref mut lhs,
+                ref mut rhs,
+                ..
+            } => {
+                self.ty = match uf.actual_ty(self.ty) {
+                    Some(t) => t,
+                    None => return Err(ast_error::NoActualType {
+                        compiler: fl!(),
+                        function: function.name.clone(),
+                    })
+                };
+                try!(lhs.finalize_type(uf, function));
+                rhs.finalize_type(uf, function)
+            }
+            expr_kind::Call {
+                ref mut args,
+                ..
+            } => {
+                self.ty = match uf.actual_ty(self.ty) {
+                    Some(t) => t,
+                    None => return Err(ast_error::NoActualType {
+                        function: function.name.clone(),
+                        compiler: fl!(),
+                    })
+                };
+                for arg in args {
+                    try!(arg.finalize_type(uf, function));
+                }
+                Ok(())
+            }
+            expr_kind::If {
+                ref mut condition,
+                ref mut then_value,
+                ref mut else_value,
+            } => {
+                self.ty = match uf.actual_ty(self.ty) {
+                    Some(t) => t,
+                    None => return Err(ast_error::NoActualType {
+                        function: function.name.clone(),
+                        compiler: fl!(),
+                    })
+                };
+                try!(condition.finalize_type(uf, function));
+                try!(then_value.finalize_type(uf, function));
+                else_value.finalize_type(uf, function)
+            }
+            expr_kind::Return(ref mut ret) => {
+                self.ty = match uf.actual_ty(self.ty) {
+                    Some(t @ ty::Diverging) => t,
+                    Some(t) => panic!("ICE: return without Diverging type: {:#?}", t),
+                    None => panic!("ICE: return with no type (should be Diverging)")
+                };
+                ret.finalize_type(uf, function)
+            }
+            ref ty => panic!("unimplemented: {:#?}", ty),
         }
     }
 
@@ -338,7 +520,7 @@ pub enum item {
 
 #[derive(Debug)]
 struct function {
-    dbg_name: String,
+    name: String,
     args: HashMap<String, (usize, ty)>,
     output: ty,
     input: Vec<ty>,
@@ -372,7 +554,7 @@ impl function {
         }
 
         Ok(function {
-            dbg_name: name,
+            name: name,
             args: args_hashmap,
             output: ret_ty,
             input: args_ty,
@@ -426,18 +608,26 @@ pub enum ast_error {
     IncorrectNumberOfArguments {
         passed: usize,
         expected: usize,
-        function: String,
+        callee: String,
+        caller: String,
     },
     UndefinedVariableName {
         name: String,
         function: String,
     },
     FunctionDoesntExist(String),
-    IncorrectType {
-        expected: ty,
-        found: ty,
+    CouldNotUnify {
+        first: ty,
+        second: ty,
+        function: String,
         compiler: (&'static str, u32),
     },
+    NoActualType {
+        function: String,
+        compiler:  (&'static str, u32),
+    },
+    UnknownType(&'static str),
+    /*
     BinopUnsupported {
         op: operand,
         lhs: ty,
@@ -447,15 +637,7 @@ pub enum ast_error {
         op: operand,
         inner: ty,
     },
-    CouldNotUnify {
-        first: ty,
-        second: ty,
-        compiler: (&'static str, u32),
-    },
-    NoActualType {
-        compiler:  (&'static str, u32),
-    },
-    UnknownType(&'static str),
+    */
 }
 
 #[derive(Debug)]
@@ -504,12 +686,13 @@ impl ast {
 
     fn typeck(&mut self) -> Result<(), ast_error> {
         for (name, block) in self.function_blocks.iter_mut() {
-            let expected_ty = match self.functions.get(name) {
-                Some(f) => f.output.clone(),
-                None => panic!("ICE: block without an associated function: {}", name),
-            };
             let mut uf = union_find::new();
             let mut vars = HashMap::<String, ty>::new();
+            let mut live_blk = true;
+            let function = match self.functions.get(name) {
+                Some(f) => f,
+                None => panic!("ICE: block without an associated function: {}", name),
+            };
             for stmt in &mut block.0 {
                 match *stmt {
                     stmt::Let {
@@ -518,31 +701,39 @@ impl ast {
                         ref mut value,
                     } => {
                         ty.generate_inference_id(&mut uf);
-                        try!(value.unify_type(*ty, &mut uf, &vars));
+                        try!(value.unify_type(*ty, &mut uf, function, &vars, &self.functions));
                         vars.insert(name.to_owned(), *ty);
-                    },
-                    _ => unimplemented!(),
+                    }
+                    stmt::Expr(ref mut e @ expr {
+                        kind: expr_kind::Return(_),
+                        ..
+                    }) => {
+                        try!(e.unify_type(ty::Diverging, &mut uf, function, &vars, &self.functions));
+                        live_blk = false;
+                        break;
+                    }
+                    ref st => panic!("unimplemented: {:?}", st)
                 }
             }
-            match block.1 {
-                Some(ref mut expr) => {
-                    try!(expr.unify_type(expected_ty, &mut uf, &vars));
-                    expr.ty = match uf.actual_ty(expr.ty) {
-                        Some(t) => t,
-                        None => return Err(ast_error::NoActualType {
-                            compiler: fl!(),
-                        }),
-                    }
-                },
-                None => {
-                    if expected_ty != ty::Unit {
-                        return Err(ast_error::CouldNotUnify {
-                            first: ty::Unit,
-                            second: expected_ty,
-                            compiler: fl!(),
-                        })
-                    }
-                },
+            if live_blk {
+                match block.1 {
+                    Some(ref mut expr) => {
+                        try!(expr.unify_type(function.output, &mut uf, function, &vars, &self.functions));
+                        // at this point the compiler is done inferring types for this functions
+                        // and so it starts finalizing types
+                        try!(expr.finalize_type(&mut uf, function))
+                    },
+                    None => {
+                        if function.output != ty::Unit {
+                            return Err(ast_error::CouldNotUnify {
+                                first: ty::Unit,
+                                second: function.output,
+                                function: function.name.clone(),
+                                compiler: fl!(),
+                            })
+                        }
+                    },
+                }
             }
             for stmt in &mut block.0 {
                 match *stmt {
@@ -554,10 +745,18 @@ impl ast {
                         *ty = match uf.actual_ty(*ty) {
                             Some(t) => t,
                             None => return Err(ast_error::NoActualType {
+                                function: function.name.clone(),
                                 compiler: fl!(),
                             })
                         };
-                        try!(value.finalize_type(&mut uf));
+                        try!(value.finalize_type(&mut uf, function));
+                    }
+                    stmt::Expr(ref mut e @ expr {
+                        kind: expr_kind::Return(_),
+                        ..
+                    }) => {
+                        try!(e.finalize_type(&mut uf, function));
+                        break;
                     }
                     _ => unimplemented!(),
                 }
@@ -595,7 +794,8 @@ impl ast {
                     return Err(ast_error::IncorrectNumberOfArguments {
                         passed: 0,
                         expected: main.input.len(),
-                        function: "main".to_owned(),
+                        callee: "main".to_owned(),
+                        caller: "[program]".to_owned(),
                     });
                 }
                 let mut engine: LLVMExecutionEngineRef = std::mem::uninitialized();
@@ -1086,7 +1286,7 @@ impl<'a> block<'a> {
                 raw: raw,
                 builder_: builder,
                 live: true,
-                dbg_name: format!("function: {}, block: {}", function.dbg_name, name),
+                dbg_name: format!("function: {}, block: {}", function.name, name),
                 function: std::marker::PhantomData,
             }
         }

@@ -67,8 +67,8 @@ impl ty {
 
     pub fn is_final_type(&self) -> bool {
         match *self {
-            ty::SInt(_) | ty::UInt(_) | ty::Bool | ty::Unit => true,
-            ty::Diverging | ty::Infer(_) | ty::InferInt(_) => false,
+            ty::SInt(_) | ty::UInt(_) | ty::Bool | ty::Unit | ty::Diverging => true,
+            ty::Infer(_) | ty::InferInt(_) => false,
         }
     }
 

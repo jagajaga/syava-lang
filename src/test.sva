@@ -1,23 +1,19 @@
 // returns 89
 fn main() -> u32 {
-    let x = 10;
-    x
+    fib(10)
 }
 
-/*
 //returns the nth fibonacci number
 fn fib(n: u32) -> u32 {
-    let ret: u32 = if fib_base(n) {
-        return return return 1 // the type of return is diverging, so it coerces
-                               // to anything
+    let x = if fib_base(n) {
+        return return return 1
     } else {
-        fib(n - 1u32) + fib(n - 2u32)
+        fib(n - 1) + fib(n - 2)
     };
-
-    ret
+    return x;
+    return false; // after a return stmt, so not checked
 }
 
 fn fib_base(n: u32) -> bool {
-    n == 0u32 || n == 1u32
+    n == 0 || n == 1
 }
-*/
