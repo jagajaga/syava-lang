@@ -190,7 +190,7 @@ impl expr {
                     block.ret(ret);
                 }
                 match ty {
-                    ty::Infer(_) | ty::InferInt(_) => unimplemented!(),
+                    ty::Infer(_) | ty::InferInt(_) => panic!("ICE: inferrence variables after typeck"),
                     ty => value::undef(ty),
                 }
             }
@@ -239,6 +239,19 @@ impl expr {
                         function: function.name.clone(),
                     })
                 }
+            }
+            expr_kind::Plus(ref mut inner) | expr_kind::Minus(ref mut inner)
+            | expr_kind::Not(ref mut inner) => {
+                try!(inner.unify_type(to_unify, uf, function, variables, functions));
+                let ty = self.ty;
+                uf.unify(self.ty, inner.ty).map_err(|()|
+                    ast_error::CouldNotUnify {
+                        first: ty,
+                        second: inner.ty,
+                        function: function.name.clone(),
+                        compiler: fl!(),
+                    }
+                )
             }
             expr_kind::Binop {
                 op,
@@ -310,7 +323,7 @@ impl expr {
                                 passed: args.len(),
                                 expected: f.input.len(),
                                 callee: callee.clone(),
-                                caller: "".to_owned(), // TODO: fix this
+                                caller: function.name.clone(),
                             })
                         }
 
@@ -353,7 +366,6 @@ impl expr {
                 self.ty = ty::Diverging;
                 ret.unify_type(function.output, uf, function, variables, functions)
             }
-            ref ty => panic!("unimplemented: {:#?}", ty),
         }
     }
 
@@ -369,6 +381,72 @@ impl expr {
                     })
                 };
                 Ok(())
+            }
+            expr_kind::Plus(ref mut inner) => {
+                self.ty = match uf.actual_ty(self.ty) {
+                    Some(t) => t,
+                    None => return Err(ast_error::NoActualType {
+                        compiler: fl!(),
+                        function: function.name.clone(),
+                    })
+                };
+                try!(inner.finalize_type(uf, function));
+                assert!(self.ty == inner.ty);
+                match self.ty {
+                    ty::SInt(_) | ty::UInt(_) => Ok(()),
+                    ty => {
+                        Err(ast_error::UnopUnsupported {
+                            op: operand::Plus,
+                            inner: ty,
+                            function: function.name.clone(),
+                            compiler: fl!(),
+                        })
+                    }
+                }
+            }
+            expr_kind::Minus(ref mut inner) => {
+                self.ty = match uf.actual_ty(self.ty) {
+                    Some(t) => t,
+                    None => return Err(ast_error::NoActualType {
+                        compiler: fl!(),
+                        function: function.name.clone(),
+                    })
+                };
+                try!(inner.finalize_type(uf, function));
+                assert!(self.ty == inner.ty);
+                match self.ty {
+                    ty::SInt(_) => Ok(()),
+                    ty => {
+                        Err(ast_error::UnopUnsupported {
+                            op: operand::Minus,
+                            inner: ty,
+                            function: function.name.clone(),
+                            compiler: fl!(),
+                        })
+                    }
+                }
+            }
+            expr_kind::Not(ref mut inner) => {
+                self.ty = match uf.actual_ty(self.ty) {
+                    Some(t) => t,
+                    None => return Err(ast_error::NoActualType {
+                        compiler: fl!(),
+                        function: function.name.clone(),
+                    })
+                };
+                try!(inner.finalize_type(uf, function));
+                assert!(self.ty == inner.ty);
+                match self.ty {
+                    ty::SInt(_) | ty::UInt(_) | ty::Bool => Ok(()),
+                    ty => {
+                        Err(ast_error::UnopUnsupported {
+                            op: operand::Not,
+                            inner: ty,
+                            function: function.name.clone(),
+                            compiler: fl!(),
+                        })
+                    }
+                }
             }
             expr_kind::Binop {
                 ref mut lhs,
@@ -425,7 +503,6 @@ impl expr {
                 };
                 ret.finalize_type(uf, function)
             }
-            ref ty => panic!("unimplemented: {:#?}", ty),
         }
     }
 
@@ -610,12 +687,20 @@ pub enum ast_error {
         expected: usize,
         callee: String,
         caller: String,
+        //compiler: (&'static str, u32),
     },
     UndefinedVariableName {
         name: String,
         function: String,
+        //compiler: (&'static str, u32),
     },
     FunctionDoesntExist(String),
+    UnopUnsupported {
+        op: operand,
+        inner: ty,
+        function: String,
+        compiler: (&'static str, u32),
+    },
     CouldNotUnify {
         first: ty,
         second: ty,
@@ -632,10 +717,6 @@ pub enum ast_error {
         op: operand,
         lhs: ty,
         rhs: ty,
-    },
-    UnopUnsupported {
-        op: operand,
-        inner: ty,
     },
     */
 }
@@ -712,7 +793,11 @@ impl ast {
                         live_blk = false;
                         break;
                     }
-                    ref st => panic!("unimplemented: {:?}", st)
+                    stmt::Expr(ref mut e) => {
+                        let mut ty = ty::Infer(None);
+                        ty.generate_inference_id(&mut uf);
+                        try!(e.unify_type(ty, &mut uf, function, &vars, &self.functions));
+                    }
                 }
             }
             if live_blk {
@@ -758,7 +843,9 @@ impl ast {
                         try!(e.finalize_type(&mut uf, function));
                         break;
                     }
-                    _ => unimplemented!(),
+                    stmt::Expr(ref mut e) => {
+                        try!(e.finalize_type(&mut uf, function));
+                    }
                 }
             }
         }

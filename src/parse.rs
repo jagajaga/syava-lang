@@ -231,7 +231,7 @@ impl<'src> lexer<'src> {
         }
     }
     fn ungetc(&mut self, c: char) {
-        // TODO: maybe assert that length == 0?
+        assert!(self.readahead.len() == 0); // make sure that readahead is only 1
         self.readahead.push(c)
     }
 

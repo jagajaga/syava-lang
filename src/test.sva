@@ -1,6 +1,7 @@
 // returns 89
 fn main() -> u32 {
-    fib(10)
+    fib(10);
+    return fib(10);
 }
 
 //returns the nth fibonacci number
