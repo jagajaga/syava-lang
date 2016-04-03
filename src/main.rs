@@ -16,7 +16,7 @@ mod parse;
 mod trans;
 mod ty;
 use parse::lexer;
-use trans::{ast};
+use trans::ast;
 
 fn main() {
     use std::env;

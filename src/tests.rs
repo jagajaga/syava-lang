@@ -1,11 +1,11 @@
 use trans::{ast, ast_error};
-use parse::{lexer, parser_error};
+use parse::{lexer, parser_error, token_type};
 
 #[derive(Debug)]
 #[derive(PartialEq)]
 enum errors {
     Ast(ast_error),
-    Parser(parser_error)
+    Parser(parser_error),
 }
 
 fn test(s: &'static str) -> Result<String, errors> {
@@ -22,7 +22,8 @@ fn test(s: &'static str) -> Result<String, errors> {
 
 #[test]
 fn no_main() {
-    assert_eq!(test(""), Err(errors::Ast(ast_error::FunctionDoesntExist("main".to_string()))))
+    assert_eq!(test(""),
+               Err(errors::Ast(ast_error::FunctionDoesntExist("main".to_string()))))
 }
 
 #[test]
@@ -57,13 +58,58 @@ fn fib_10() {
 
 #[test]
 fn simple_function() {
-    assert_eq!(test("fn main() -> s32 { return 42; }"), Ok("42".to_string()));
+    assert_eq!(test("fn main() -> s32 { return 42; }"),
+               Ok("42".to_string()));
 }
 
 #[test]
 fn wrong_return_main_type() {
     match test("fn main() { return true; }") {
         Err(errors::Ast(ast_error::IncorrectType { expected: a, found: b, .. })) => assert!(a != b),
-        _ => panic!("Error in compiler because test is passing or there is an parsing error")
+        _ => panic!("Error in compiler because test is passing or there is an parsing error"),
+    }
+}
+
+#[test]
+fn simple_add_2_to_1_plus_1() {
+    assert_eq!(test("fn main() -> s32 { return add2 (1+1); } fn add2 (a: s32) -> s32 { return a \
+                     + 2;}"),
+               Ok("4".to_string()))
+}
+
+#[test]
+fn simple_mul_2_to_1_plus_1() {
+    assert_eq!(test("fn main() -> s32 { return mul2 (1+1); } fn mul2 (a: s32) -> s32 { return a \
+                     * 2;}"),
+               Ok("4".to_string()))
+}
+
+#[test]
+fn function_doesnt_exist() {
+    assert_eq!(test("fn main() -> s32 { return add2 (1+1); } fn mul2 (a: s32) -> s32 { return a \
+                     * 2;}"),
+               Err(errors::Ast(ast_error::FunctionDoesntExist("add2".to_string()))))
+}
+
+#[test]
+fn simple_div_2_to_1_plus_1() {
+    assert_eq!(test("fn main() -> s32 { return div2 (1+1); } fn div2 (a: s32) -> s32 { return a \
+                     / 2;}"),
+               Ok("1".to_string()))
+}
+
+#[test]
+fn simple_return_if() {
+    assert_eq!(test("fn main() -> s32 { return if 1 > 2 {1} else {2}; }"),
+               Ok("2".to_string()))
+}
+
+#[test]
+fn function_without_statement() {
+    match test("fn main() -> s32 { if 1 > 2 {return 1} else {return 2}; }") {
+        Err(errors::Parser(parser_error::UnexpectedToken { expected: a, .. })) => {
+            assert!(a == token_type::Statement)
+        }
+        _ => panic!("Error in compiler because test is passing or there is an parsing error"),
     }
 }
