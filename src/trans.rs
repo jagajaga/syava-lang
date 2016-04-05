@@ -347,8 +347,7 @@ impl expr {
     }
 
     fn finalize_block_ty(block: (&mut Vec<stmt>, &mut Option<Box<expr>>), uf: &mut union_find,
-            function: &function)
-            -> Result<(), ast_error> {
+            function: &function) -> Result<(), ast_error> {
         let mut live_blk = true;
 
         for stmt in block.0.iter_mut() {
@@ -705,6 +704,16 @@ impl expr {
                 };
                 ret.finalize_type(uf, function)
             }
+        }
+    }
+
+    pub fn is_block(&self) -> bool {
+        match self.kind {
+            expr_kind::If {..} => true,
+            expr_kind::Call {..} | expr_kind::Binop {..} | expr_kind::Plus(_)
+            | expr_kind::Minus(_) | expr_kind::Not(_) | expr_kind::Variable(_)
+            | expr_kind::IntLiteral(_) | expr_kind::BoolLiteral(_) | expr_kind::UnitLiteral
+            | expr_kind::Return(_) => false,
         }
     }
 

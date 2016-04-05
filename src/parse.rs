@@ -490,14 +490,14 @@ pub enum parser_error {
 
 pub struct parser<'src> {
     lexer: lexer<'src>,
-    token_buffer: Vec<token>,
+    peekahead: Option<token>,
 }
 
 impl<'src> parser<'src> {
     pub fn new(lexer: lexer<'src>) -> Self {
         parser {
             lexer: lexer,
-            token_buffer: Vec::new(),
+            peekahead: None,
         }
     }
 
@@ -507,13 +507,15 @@ impl<'src> parser<'src> {
     }
 
     fn get_token(&mut self) -> Result<token, parser_error> {
-        match self.token_buffer.pop() {
+        match self.peekahead.take() {
             Some(tok) => Ok(tok),
             None => self.lexer.next_token(),
         }
     }
     fn unget_token(&mut self, token: token) {
-        self.token_buffer.push(token)
+        assert!(self.peekahead.is_none(), "current: {:?}, attempted: {:?}, line: {}",
+            self.peekahead, token, self.line());
+        self.peekahead = Some(token);
     }
 
     pub fn item(&mut self) -> Result<item, parser_error> {
@@ -624,27 +626,27 @@ impl<'src> parser<'src> {
             }
             token::KeywordIf => {
                 let condition = try!(self.parse_expr(line!()));
-                try!(self.eat(token::OpenBrace, line!()));
                 let if_value = try!(self.parse_block());
-                try!(self.eat(token::CloseBrace, line!()));
-                try!(self.eat(token::KeywordElse, line!()));
-
                 let else_value =
-                match try!(self.eat_ty(token_type::AnyOf(
-                        vec![token::OpenBrace, token::KeywordIf]), line!())) {
-                    token::OpenBrace => {
-                        let blk = try!(self.parse_block());
-                        try!(self.eat(token::CloseBrace, line!()));
-                        blk
+                if let Some(_) = try!(self.maybe_eat(token::KeywordElse, line!())) {
+                    match try!(self.eat_ty(token_type::AnyOf(
+                            vec![token::OpenBrace, token::KeywordIf]), line!())) {
+                        token::OpenBrace => {
+                            self.unget_token(token::OpenBrace);
+                            try!(self.parse_block())
+                        }
+                        token::KeywordIf => {
+                            self.unget_token(token::KeywordIf);
+                            try!(self.parse_block())
+                        }
+                        tok => unreachable!("{:?}", tok),
                     }
-                    token::KeywordIf => {
-                        self.unget_token(token::KeywordIf);
-                        try!(self.parse_block())
-                    }
-                    tok => unreachable!("{:?}", tok),
+                } else {
+                    (Vec::new(), Some(expr::unit_lit()))
                 };
                 Ok(Some(expr::if_else(condition, if_value, else_value, None)))
-            }
+            },
+
             token::Integer {value, suffix} => {
                 if suffix == "" {
                     return Ok(Some(expr::int_lit(value, None)));
@@ -746,6 +748,18 @@ impl<'src> parser<'src> {
             Some(e) => {
                 if let Some(_) = try!(self.maybe_eat(token::Semicolon, line!())) {
                     Ok(Some(Left(stmt::Expr(e))))
+                } else if e.is_block() {
+                    // if the expression is a block, treat it as an expression
+                    // *unless* it's the last expression in the outer block
+                    match try!(self.maybe_eat(token::CloseBrace, line!())) {
+                        Some(_) => {
+                            self.unget_token(token::CloseBrace);
+                            Ok(Some(Right(e)))
+                        }
+                        None => {
+                            Ok(Some(Left(stmt::Expr(e))))
+                        }
+                    }
                 } else {
                     Ok(Some(Right(e)))
                 }
@@ -796,6 +810,7 @@ impl<'src> parser<'src> {
     }
 
     fn parse_block(&mut self) -> Result<(Vec<stmt>, Option<expr>), parser_error> {
+        try!(self.eat(token::OpenBrace, line!()));
         let mut body = Vec::new();
         let mut expr = None;
         while let Some(st) = try!(self.parse_stmt()) {
@@ -804,6 +819,7 @@ impl<'src> parser<'src> {
                 Right(e) => {
                     expr = Some(e);
                     if let Some(_) = try!(self.parse_stmt()) {
+                        println!("{:#?}", expr.unwrap());
                         return Err(parser_error::ExpectedSemicolon {
                             line: self.line(),
                             compiler: fl!(),
@@ -814,6 +830,7 @@ impl<'src> parser<'src> {
                 }
             }
         }
+        try!(self.eat(token::CloseBrace, line!()));
         Ok((body, expr))
     }
 
@@ -865,11 +882,9 @@ impl<'src> parser<'src> {
             }
             None => ty::Unit,
         };
-        try!(self.eat(token::OpenBrace, line!()));
 
         let (stmts, expr) = try!(self.parse_block());
         let expr = expr.map(|e| Box::new(e));
-        try!(self.eat(token::CloseBrace, line!()));
 
         Ok(item::Function { name: name, ret: ret_ty, args: args, body: (stmts, expr) })
     }
