@@ -45,9 +45,9 @@ impl ty {
                 ty::SInt(ref size) | ty::UInt(ref size) => LLVMIntType(size.size()),
                 ty::Bool => LLVMInt1Type(),
                 ty::Unit => LLVMStructType(std::ptr::null_mut(), 0, false as LLVMBool),
-                ty::Diverging => unreachable!("Diverging is not a real type"),
+                ty::Diverging => panic!("ICE: Attempted to get the LLVM type of Diverging"),
                 ty::Infer(_) | ty::InferInt(_) =>
-                    unreachable!("You can't get the llvm type of an inference variable"),
+                    panic!("ICE: Attempted to get the LLVM type of an inference variable"),
             }
         }
     }
@@ -60,7 +60,7 @@ impl ty {
                 ty::Unit => LLVMVoidType(),
                 ty::Diverging => LLVMVoidType(),
                 ty::Infer(_) | ty::InferInt(_) =>
-                    unreachable!("You can't get the llvm type of an inference variable"),
+                    panic!("ICE: Attempted to get the LLVM return type of an inference variable"),
             }
         }
     }

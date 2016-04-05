@@ -107,6 +107,7 @@ impl operand {
 
     // simply a convenience function
     pub fn expr(&self, lhs: expr, rhs: expr) -> expr {
+        self.precedence(); // makes certain that self is a binop
         expr {
             kind: ::trans::expr_kind::Binop {
                 op: *self,
@@ -661,9 +662,13 @@ impl<'src> parser<'src> {
                 })
             }
             token::OpenParen => {
-                let expr = try!(self.parse_expr(line!()));
-                try!(self.eat(token::CloseParen, line!()));
-                Ok(Some(expr))
+                if let Some(_) = try!(self.maybe_eat(token::CloseParen, line!())) {
+                    Ok(Some(expr::unit_lit()))
+                } else {
+                    let expr = try!(self.parse_expr(line!()));
+                    try!(self.eat(token::CloseParen, line!()));
+                    Ok(Some(expr))
+                }
             }
             token::Operand(operand::Minus) => {
                 let inner = try!(self.parse_single_expr(line!()));

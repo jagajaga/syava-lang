@@ -1,13 +1,13 @@
 // returns 89
 fn main() -> u32 {
-    fib(10);
-    return fib(10);
+    fib(10 + 5)
 }
 
 //returns the nth fibonacci number
 fn fib(n: u32) -> u32 {
     let x = if fib_base(n) {
-        return return return 1
+        return return return 1 // return is Diverging, so it can 
+                               // be coerced to any type
     } else {
         fib(n - 1) + fib(n - 2)
     };
