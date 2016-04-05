@@ -6,13 +6,15 @@ fn main() -> u32 {
 //returns the nth fibonacci number
 fn fib(n: u32) -> u32 {
     let x = if fib_base(n) {
-        return return return 1 // return is Diverging, so it can 
-                               // be coerced to any type
+        return return return 1; // return is Diverging, so it can 
+                                // be coerced to any type
     } else {
-        fib(n - 1) + fib(n - 2)
+        let y = fib(n - 1);
+        let z = fib(n - 2);
+        y + z
     };
+
     return x;
-    return false; // after a return stmt, so not checked
 }
 
 fn fib_base(n: u32) -> bool {

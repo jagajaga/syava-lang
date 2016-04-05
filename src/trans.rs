@@ -31,8 +31,8 @@ pub enum expr_kind {
     },
     If {
         condition: Box<expr>,
-        then_value: Box<expr>,
-        else_value: Box<expr>,
+        then_value: (Vec<stmt>, Option<Box<expr>>),
+        else_value: (Vec<stmt>, Option<Box<expr>>),
     },
     Binop {
         op: operand,
@@ -57,7 +57,7 @@ pub struct expr {
 
 impl expr {
     fn translate_out<'a>(self, out: Option<&lvalue>, function: &'a function,
-            locals: &HashMap<String, lvalue>, block: &mut block<'a>, ast: &ast) {
+            locals: &mut HashMap<String, lvalue<'a>>, block: &mut block<'a>, ast: &ast) {
         assert!(self.ty.is_final_type(), "{:?}", self.ty);
         match self.kind {
             expr_kind::Binop {
@@ -68,8 +68,8 @@ impl expr {
                 expr {
                     kind: expr_kind::If {
                         condition: lhs,
-                        then_value: Box::new(expr::bool_lit(true)),
-                        else_value: rhs,
+                        then_value: (vec![], Some(Box::new(expr::bool_lit(true)))),
+                        else_value: (vec![], Some(rhs)),
                     },
                     ty: self.ty,
                 }.translate_out(out, function, locals, block, ast)
@@ -82,8 +82,8 @@ impl expr {
                 expr {
                     kind: expr_kind::If {
                         condition: Box::new(expr::not(*lhs, Some(ty::Bool))),
-                        then_value: Box::new(expr::bool_lit(false)),
-                        else_value: rhs,
+                        then_value: (vec![], Some(Box::new(expr::bool_lit(false)))),
+                        else_value: (vec![], Some(rhs)),
                     },
                     ty: self.ty,
                 }.translate_out(out, function, locals, block, ast)
@@ -106,10 +106,18 @@ impl expr {
                     let join_blk = block::new(function, "join");
                     block.conditional_branch(cond, &then_blk, &else_blk);
 
-                    then_value.translate_out(out, function, locals, &mut then_blk, ast);
+                    let value = Self::translate_block(then_value, self.ty, function,
+                        locals, &mut then_blk, ast);
+                    if let Some(ptr) = out {
+                        ptr.write(value, &then_blk);
+                    }
                     then_blk.branch(&join_blk);
 
-                    else_value.translate_out(out, function, locals, &mut else_blk, ast);
+                    let value = Self::translate_block(else_value, self.ty, function,
+                        locals, &mut else_blk, ast);
+                    if let Some(ptr) = out {
+                        ptr.write(value, &else_blk);
+                    }
                     else_blk.branch(&join_blk);
 
                     *block = join_blk;
@@ -125,7 +133,7 @@ impl expr {
     }
 
     fn translate_value<'a>(self, function: &'a function,
-            locals: &HashMap<String, lvalue>, block: &mut block<'a>, ast: &ast) -> value {
+            locals: &mut HashMap<String, lvalue<'a>>, block: &mut block<'a>, ast: &ast) -> value {
         match self.kind {
             k @ expr_kind::Binop { op: operand::AndAnd, .. }
             | k @ expr_kind::Binop { op: operand::OrOr, .. }
@@ -232,6 +240,50 @@ impl expr {
         }
     }
 
+    fn translate_block<'a>(body: (Vec<stmt>, Option<Box<expr>>), blk_ty: ty,
+            function: &'a function, locals: &mut HashMap<String, lvalue<'a>>, block: &mut block<'a>,
+            ast: &ast) -> value {
+        let locals_at_start = locals.clone();
+        for st in body.0 {
+            match st {
+                stmt::Let {
+                    name,
+                    ty,
+                    value,
+                } => {
+                    let local = lvalue::new(block, ty, Some(&name));
+                    value.translate_out(Some(&local), function, locals, block, ast);
+                    locals.insert(name, local);
+                }
+                stmt::Expr(e) => {
+                    e.translate_out(None, function, locals, block, ast);
+                    if !block.is_live() {
+                        break;
+                    }
+                }
+            }
+        }
+
+        if block.is_live() {
+            if let Some(e) = body.1 {
+                let ret = if e.requires_out_ptr() {
+                    let ret_ptr = lvalue::new(&block, blk_ty, Some("ret"));
+                    e.translate_out(Some(&ret_ptr), function, locals, block, ast);
+                    ret_ptr.read(&block)
+                } else {
+                    e.translate_value(function, locals, block, ast)
+                };
+                ret
+            } else {
+                *locals = locals_at_start;
+                value::undef(blk_ty)
+            }
+        } else {
+            *locals = locals_at_start;
+            value::unit_literal(ty::Unit)
+        }
+    }
+
     fn requires_out_ptr(&self) -> bool {
         match self.kind {
             expr_kind::Binop { op: operand::OrOr, .. }
@@ -243,9 +295,111 @@ impl expr {
         }
     }
 
-    fn unify_type(&mut self, to_unify: ty, uf: &mut union_find, function: &function,
-        variables: &HashMap<String, ty>, functions: &HashMap<String, function>)
+    fn typeck_block(block: (&mut Vec<stmt>, &mut Option<Box<expr>>), to_unify: ty,
+            uf: &mut union_find, variables: &mut HashMap<String, ty>,
+            function: &function, functions: &HashMap<String, function>)
             -> Result<(), ast_error> {
+        let mut live_blk = true;
+        for stmt in block.0.iter_mut() {
+            match *stmt {
+                stmt::Let {
+                    ref name,
+                    ref mut ty,
+                    ref mut value,
+                } => {
+                    ty.generate_inference_id(uf);
+                    try!(value.unify_type(*ty, uf, variables, function, functions));
+                    variables.insert(name.to_owned(), *ty);
+                }
+                stmt::Expr(ref mut e @ expr {
+                    kind: expr_kind::Return(_),
+                    ..
+                }) => {
+                    try!(e.unify_type(ty::Diverging, uf, variables, function, functions));
+                    live_blk = false;
+                    break;
+                }
+                stmt::Expr(ref mut e) => {
+                    let mut ty = ty::Infer(None);
+                    ty.generate_inference_id(uf);
+                    try!(e.unify_type(ty, uf, variables, function, functions));
+                }
+            }
+        }
+        if live_blk {
+            match *block.1 {
+                Some(ref mut expr) => {
+                    try!(expr.unify_type(to_unify, uf, variables, function, functions));
+                },
+                None => {
+                    if to_unify != ty::Unit {
+                        return Err(ast_error::CouldNotUnify {
+                            first: ty::Unit,
+                            second: to_unify,
+                            function: function.name.clone(),
+                            compiler: fl!(),
+                        })
+                    }
+                },
+            }
+        }
+        Ok(())
+    }
+
+    fn finalize_block_ty(block: (&mut Vec<stmt>, &mut Option<Box<expr>>), uf: &mut union_find,
+            function: &function)
+            -> Result<(), ast_error> {
+        let mut live_blk = true;
+
+        for stmt in block.0.iter_mut() {
+            if !live_blk {
+                return Err(ast_error::StatementsAfterReturn {
+                    function: function.name.clone(),
+                    compiler: fl!(),
+                });
+            }
+            match *stmt {
+                stmt::Let {
+                    ref mut ty,
+                    ref mut value,
+                    ..
+                } => {
+                    *ty = match uf.actual_ty(*ty) {
+                        Some(t) => t,
+                        None => return Err(ast_error::NoActualType {
+                            function: function.name.clone(),
+                            compiler: fl!(),
+                        })
+                    };
+                    try!(value.finalize_type(uf, function));
+                }
+                stmt::Expr(ref mut e @ expr {
+                    kind: expr_kind::Return(_),
+                    ..
+                }) => {
+                    try!(e.finalize_type(uf, function));
+                    live_blk = false;
+                }
+                stmt::Expr(ref mut e) => {
+                    try!(e.finalize_type(uf, function));
+                }
+            }
+        }
+
+        if let Some(ref mut expr) = *block.1 {
+            if !live_blk {
+                return Err(ast_error::StatementsAfterReturn {
+                    function: function.name.clone(),
+                    compiler: fl!(),
+                });
+            }
+            try!(expr.finalize_type(uf, function));
+        }
+        Ok(())
+    }
+
+    fn unify_type(&mut self, to_unify: ty, uf: &mut union_find, variables: &mut HashMap<String, ty>,
+            function: &function, functions: &HashMap<String, function>) -> Result<(), ast_error> {
         self.ty.generate_inference_id(uf);
         match self.kind {
             expr_kind::IntLiteral(_) | expr_kind::BoolLiteral(_) | expr_kind::UnitLiteral => {
@@ -288,7 +442,7 @@ impl expr {
             }
             expr_kind::Plus(ref mut inner) | expr_kind::Minus(ref mut inner)
             | expr_kind::Not(ref mut inner) => {
-                try!(inner.unify_type(to_unify, uf, function, variables, functions));
+                try!(inner.unify_type(to_unify, uf, variables, function, functions));
                 let ty = self.ty;
                 uf.unify(self.ty, inner.ty).map_err(|()|
                     ast_error::CouldNotUnify {
@@ -309,8 +463,8 @@ impl expr {
                     | operand::Minus | operand::Shl | operand::Shr | operand::And
                     | operand::Xor | operand::Or => {
                         let ty = self.ty;
-                        try!(lhs.unify_type(self.ty, uf, function, variables, functions));
-                        try!(rhs.unify_type(lhs.ty, uf, function, variables, functions));
+                        try!(lhs.unify_type(self.ty, uf, variables, function, functions));
+                        try!(rhs.unify_type(lhs.ty, uf, variables, function, functions));
                         uf.unify(self.ty, to_unify).map_err(|()|
                             ast_error::CouldNotUnify {
                                 first: ty,
@@ -326,8 +480,8 @@ impl expr {
                     | operand::GreaterThanEquals => {
                         self.ty = ty::Bool;
                         rhs.ty.generate_inference_id(uf);
-                        try!(lhs.unify_type(rhs.ty, uf, function, variables, functions));
-                        try!(rhs.unify_type(lhs.ty, uf, function, variables, functions));
+                        try!(lhs.unify_type(rhs.ty, uf, variables, function, functions));
+                        try!(rhs.unify_type(lhs.ty, uf, variables, function, functions));
                         uf.unify(self.ty, to_unify).map_err(|()|
                             ast_error::CouldNotUnify {
                                 first: ty::Bool,
@@ -340,8 +494,8 @@ impl expr {
 
                     operand::AndAnd | operand::OrOr => {
                         self.ty = ty::Bool;
-                        try!(lhs.unify_type(ty::Bool, uf, function, variables, functions));
-                        try!(rhs.unify_type(ty::Bool, uf, function, variables, functions));
+                        try!(lhs.unify_type(ty::Bool, uf, variables, function, functions));
+                        try!(rhs.unify_type(ty::Bool, uf, variables, function, functions));
 
                         uf.unify(self.ty, to_unify).map_err(|()|
                             ast_error::CouldNotUnify {
@@ -374,7 +528,7 @@ impl expr {
                         }
 
                         for (arg_ty, expr) in f.input.iter().zip(args) {
-                           try!(expr.unify_type(*arg_ty, uf, function, variables, functions));
+                           try!(expr.unify_type(*arg_ty, uf, variables, function, functions));
                         }
                         self.ty = f.output;
                         let ty = self.ty;
@@ -395,9 +549,11 @@ impl expr {
                 ref mut then_value,
                 ref mut else_value,
             } => {
-                try!(condition.unify_type(ty::Bool, uf, function, variables, functions));
-                try!(then_value.unify_type(to_unify, uf, function, variables, functions));
-                try!(else_value.unify_type(to_unify, uf, function, variables, functions));
+                try!(condition.unify_type(ty::Bool, uf, variables, function, functions));
+                try!(Self::typeck_block((&mut then_value.0, &mut then_value.1), to_unify,
+                    uf, variables, function, functions));
+                try!(Self::typeck_block((&mut else_value.0, &mut else_value.1), to_unify,
+                    uf, variables, function, functions));
                 let ty = self.ty;
                 uf.unify(self.ty, to_unify).map_err(|()|
                     ast_error::CouldNotUnify {
@@ -410,7 +566,7 @@ impl expr {
             }
             expr_kind::Return(ref mut ret) => {
                 self.ty = ty::Diverging;
-                ret.unify_type(function.output, uf, function, variables, functions)
+                ret.unify_type(function.output, uf, variables, function, functions)
             }
         }
     }
@@ -538,8 +694,8 @@ impl expr {
                     })
                 };
                 try!(condition.finalize_type(uf, function));
-                try!(then_value.finalize_type(uf, function));
-                else_value.finalize_type(uf, function)
+                try!(Self::finalize_block_ty((&mut then_value.0, &mut then_value.1), uf, function));
+                Self::finalize_block_ty((&mut else_value.0, &mut else_value.1), uf, function)
             }
             expr_kind::Return(ref mut ret) => {
                 self.ty = match uf.actual_ty(self.ty) {
@@ -569,12 +725,13 @@ impl expr {
         }
     }
 
-    pub fn if_else(cond: expr, then: expr, else_: expr, ty: Option<ty>) -> expr {
+    pub fn if_else(cond: expr, then: (Vec<stmt>, Option<expr>),
+            else_: (Vec<stmt>, Option<expr>), ty: Option<ty>) -> expr {
         expr {
             kind: expr_kind::If {
                 condition: Box::new(cond),
-                then_value: Box::new(then),
-                else_value: Box::new(else_),
+                then_value: (then.0, then.1.map(|e| Box::new(e))),
+                else_value: (else_.0, else_.1.map(|e| Box::new(e))),
             },
             ty: ty.unwrap_or(ty::Infer(None)),
         }
@@ -637,7 +794,7 @@ pub enum item {
         name: String,
         ret: ty,
         args: Vec<(String, ty)>,
-        body: (Vec<stmt>, Option<expr>),
+        body: (Vec<stmt>, Option<Box<expr>>),
     }
 }
 
@@ -685,49 +842,22 @@ impl function {
         })
     }
 
-    fn add_body(&self, body: (Vec<stmt>, Option<expr>), ast: &ast) {
+    fn add_body(&self, body: (Vec<stmt>, Option<Box<expr>>), ast: &ast) {
         let mut block = block::new(self, "entry");
         let mut locals = HashMap::new();
 
-        for st in body.0 {
-            match st {
-                stmt::Let {
-                    name,
-                    ty,
-                    value,
-                } => {
-                    let local = lvalue::new(&block, ty, Some(&name));
-                    value.translate_out(Some(&local), self, &locals, &mut block, ast);
-                    locals.insert(name, local);
-                }
-                stmt::Expr(e) => {
-                    e.translate_out(None, self, &locals, &mut block, ast);
-                    if !block.is_live() {
-                        break;
-                    }
-                }
-            }
-        }
-
-        if let Some(e) = body.1 {
-            let ret = if e.requires_out_ptr() {
-                let ret_ptr = lvalue::new(&block, self.output, Some("ret"));
-                e.translate_out(Some(&ret_ptr), self, &locals, &mut block, ast);
-                ret_ptr.read(&block)
-            } else {
-                e.translate_value(self, &locals, &mut block, ast)
-            };
-            block.ret(ret)
-        }
+        let ret = expr::translate_block(body, self.output.clone(), self, &mut locals, &mut block, ast);
 
         if block.is_live() {
-            if self.output == ty::Unit {
-                block.ret(value::unit_literal(ty::Unit))
+            if self.output == ret.ty {
+                block.ret(ret)
             } else {
                 block.terminate();
-                panic!("ICE: typeck passed through non-void void function")
+                panic!("ICE: typeck passed through non-void void function: {}", self.name)
             }
         }
+
+        ast.module.optimize_function(self);
     }
 }
 
@@ -760,9 +890,13 @@ pub enum ast_error {
     },
     NoActualType {
         function: String,
-        compiler:  (&'static str, u32),
+        compiler: (&'static str, u32),
     },
     UnknownType(&'static str),
+    StatementsAfterReturn {
+        function: String,
+        compiler: (&'static str, u32),
+    },
     /*
     BinopUnsupported {
         op: operand,
@@ -775,7 +909,7 @@ pub enum ast_error {
 #[derive(Debug)]
 pub struct ast {
     functions: HashMap<String, function>,
-    function_blocks: HashMap<String, (Vec<stmt>, Option<expr>)>,
+    function_blocks: HashMap<String, (Vec<stmt>, Option<Box<expr>>)>,
     module: module,
 }
 
@@ -820,85 +954,13 @@ impl ast {
         for (name, block) in self.function_blocks.iter_mut() {
             let mut uf = union_find::new();
             let mut vars = HashMap::<String, ty>::new();
-            let mut live_blk = true;
             let function = match self.functions.get(name) {
                 Some(f) => f,
                 None => panic!("ICE: block without an associated function: {}", name),
             };
-            for stmt in &mut block.0 {
-                match *stmt {
-                    stmt::Let {
-                        ref name,
-                        ref mut ty,
-                        ref mut value,
-                    } => {
-                        ty.generate_inference_id(&mut uf);
-                        try!(value.unify_type(*ty, &mut uf, function, &vars, &self.functions));
-                        vars.insert(name.to_owned(), *ty);
-                    }
-                    stmt::Expr(ref mut e @ expr {
-                        kind: expr_kind::Return(_),
-                        ..
-                    }) => {
-                        try!(e.unify_type(ty::Diverging, &mut uf, function, &vars, &self.functions));
-                        live_blk = false;
-                        break;
-                    }
-                    stmt::Expr(ref mut e) => {
-                        let mut ty = ty::Infer(None);
-                        ty.generate_inference_id(&mut uf);
-                        try!(e.unify_type(ty, &mut uf, function, &vars, &self.functions));
-                    }
-                }
-            }
-            if live_blk {
-                match block.1 {
-                    Some(ref mut expr) => {
-                        try!(expr.unify_type(function.output, &mut uf, function, &vars, &self.functions));
-                        // at this point the compiler is done inferring types for this functions
-                        // and so it starts finalizing types
-                        try!(expr.finalize_type(&mut uf, function))
-                    },
-                    None => {
-                        if function.output != ty::Unit {
-                            return Err(ast_error::CouldNotUnify {
-                                first: ty::Unit,
-                                second: function.output,
-                                function: function.name.clone(),
-                                compiler: fl!(),
-                            })
-                        }
-                    },
-                }
-            }
-            for stmt in &mut block.0 {
-                match *stmt {
-                    stmt::Let {
-                        ref mut ty,
-                        ref mut value,
-                        ..
-                    } => {
-                        *ty = match uf.actual_ty(*ty) {
-                            Some(t) => t,
-                            None => return Err(ast_error::NoActualType {
-                                function: function.name.clone(),
-                                compiler: fl!(),
-                            })
-                        };
-                        try!(value.finalize_type(&mut uf, function));
-                    }
-                    stmt::Expr(ref mut e @ expr {
-                        kind: expr_kind::Return(_),
-                        ..
-                    }) => {
-                        try!(e.finalize_type(&mut uf, function));
-                        break;
-                    }
-                    stmt::Expr(ref mut e) => {
-                        try!(e.finalize_type(&mut uf, function));
-                    }
-                }
-            }
+            try!(expr::typeck_block((&mut block.0, &mut block.1), function.output.clone(),
+                &mut uf, &mut vars, function, &self.functions));
+            try!(expr::finalize_block_ty((&mut block.0, &mut block.1), &mut uf, function));
         }
         Ok(())
     }
@@ -997,16 +1059,30 @@ impl ast {
 #[derive(Debug)]
 struct module {
     raw: LLVMModuleRef,
+    opt: LLVMPassManagerRef,
 }
 
 impl module {
     fn new(name: &str) -> module {
+        use llvm_sys::transforms::scalar::*;
         unsafe {
             let raw = LLVMModuleCreateWithName(CString::new(name)
                 .expect("passed a string with a nul to module::new").as_ptr());
+            let opt = LLVMCreateFunctionPassManagerForModule(raw);
+
+            // NOTE: add optimizations here
+            LLVMAddBasicAliasAnalysisPass(opt);
+            LLVMAddInstructionCombiningPass(opt);
+            LLVMAddReassociatePass(opt);
+            LLVMAddGVNPass(opt);
+            LLVMAddCFGSimplificationPass(opt);
+            LLVMAddDeadStoreEliminationPass(opt);
+
+            LLVMInitializeFunctionPassManager(opt);
 
             module {
-                raw: raw
+                raw: raw,
+                opt: opt,
             }
         }
     }
@@ -1016,6 +1092,13 @@ impl module {
             args.len() as u32, false as LLVMBool);
         LLVMAddFunction(self.raw, CString::new(name.to_owned())
             .expect("name should not have a nul in it").as_ptr(), ty)
+    }
+
+    fn optimize_function(&self, func: &function) {
+        unsafe {
+            LLVMVerifyFunction(func.raw, LLVMAbortProcessAction);
+            LLVMRunFunctionPassManager(self.opt, func.raw);
+        }
     }
 }
 
