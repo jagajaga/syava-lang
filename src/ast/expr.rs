@@ -31,8 +31,8 @@ pub enum ExprKind {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
-    Plus(Box<Expr>), // unary plus
-    Minus(Box<Expr>), // unary minus
+    Pos(Box<Expr>), // unary plus
+    Neg(Box<Expr>), // unary minus
     Not(Box<Expr>), // !expr
     Variable(String),
     IntLiteral(u64),
@@ -112,14 +112,14 @@ impl Expr {
 
     pub fn neg(inner: Expr, ty: Option<Ty>) -> Expr {
         Expr {
-            kind: ExprKind::Minus(Box::new(inner)),
+            kind: ExprKind::Neg(Box::new(inner)),
             ty: ty.unwrap_or(Ty::Infer(None)),
         }
     }
 
     pub fn pos(inner: Expr, ty: Option<Ty>) -> Expr {
         Expr {
-            kind: ExprKind::Plus(Box::new(inner)),
+            kind: ExprKind::Pos(Box::new(inner)),
             ty: ty.unwrap_or(Ty::Infer(None)),
         }
     }
@@ -154,8 +154,8 @@ impl Expr {
     pub fn is_block(&self) -> bool {
         match self.kind {
             ExprKind::If {..} | ExprKind::Block(_) => true,
-            ExprKind::Call {..} | ExprKind::Binop {..} | ExprKind::Plus(_)
-            | ExprKind::Minus(_) | ExprKind::Not(_) | ExprKind::Variable(_)
+            ExprKind::Call {..} | ExprKind::Binop {..} | ExprKind::Pos(_)
+            | ExprKind::Neg(_) | ExprKind::Not(_) | ExprKind::Variable(_)
             | ExprKind::IntLiteral(_) | ExprKind::BoolLiteral(_)
             | ExprKind::UnitLiteral | ExprKind::Return(_)
             | ExprKind::Assign {..} => false,
@@ -266,7 +266,7 @@ impl Expr {
                     })
                 }
             }
-            ExprKind::Plus(ref mut inner) | ExprKind::Minus(ref mut inner)
+            ExprKind::Pos(ref mut inner) | ExprKind::Neg(ref mut inner)
             | ExprKind::Not(ref mut inner) => {
                 try!(inner.unify_type(to_unify,
                     uf, variables, function, functions));
@@ -511,7 +511,7 @@ impl Expr {
                 };
                 Ok(())
             }
-            ExprKind::Plus(ref mut inner) => {
+            ExprKind::Pos(ref mut inner) => {
                 self.ty = match uf.actual_ty(self.ty) {
                     Some(t) => t,
                     None => return Err(AstError::NoActualType {
@@ -533,7 +533,7 @@ impl Expr {
                     }
                 }
             }
-            ExprKind::Minus(ref mut inner) => {
+            ExprKind::Neg(ref mut inner) => {
                 self.ty = match uf.actual_ty(self.ty) {
                     Some(t) => t,
                     None => return Err(AstError::NoActualType {
@@ -652,19 +652,111 @@ impl Expr {
 }
 
 impl Expr {
-    pub fn translate_block(body: Block, _function: &mut mir::Function,
-            _block: &mut mir::Block) -> mir::Value {
+    pub fn translate(self, function: &mut Function,
+            block: &mir::Block, fn_types: &HashMap<String, ty::Function>)
+            -> mir::Value {
+        assert!(self.ty.is_final_type());
+        match self.kind {
+            ExprKind::IntLiteral(n) => {
+                mir::Value::const_int(n, self.ty)
+            }
+            ExprKind::Pos(e) => {
+                let inner = e.translate(function, block, fn_types);
+                mir::Value::pos(inner, &mut function.raw, block, fn_types)
+            }
+            ExprKind::Neg(e) => {
+                let inner = e.translate(function, block, fn_types);
+                mir::Value::neg(inner, &mut function.raw, block, fn_types)
+            }
+            ExprKind::Not(e) => {
+                let inner = e.translate(function, block, fn_types);
+                mir::Value::not(inner, &mut function.raw, block, fn_types)
+            }
+            ExprKind::Binop {
+                op,
+                lhs,
+                rhs,
+            } => {
+                let lhs = lhs.translate(function, block, fn_types);
+                let rhs = rhs.translate(function, block, fn_types);
+                match op {
+                    Operand::Plus =>
+                        mir::Value::add(lhs, rhs,
+                            &mut function.raw, block, fn_types),
+                    Operand::Minus =>
+                        mir::Value::sub(lhs, rhs,
+                            &mut function.raw, block, fn_types),
+
+                    Operand::Mul =>
+                        mir::Value::mul(lhs, rhs,
+                            &mut function.raw, block, fn_types),
+                    Operand::Div =>
+                        mir::Value::div(lhs, rhs,
+                            &mut function.raw, block, fn_types),
+                    Operand::Rem =>
+                        mir::Value::rem(lhs, rhs,
+                            &mut function.raw, block, fn_types),
+
+                    Operand::And =>
+                        mir::Value::and(lhs, rhs,
+                            &mut function.raw, block, fn_types),
+                    Operand::Xor =>
+                        mir::Value::xor(lhs, rhs,
+                            &mut function.raw, block, fn_types),
+                    Operand::Or =>
+                        mir::Value::or(lhs, rhs,
+                            &mut function.raw, block, fn_types),
+
+                    Operand::Shl =>
+                        mir::Value::shl(lhs, rhs,
+                            &mut function.raw, block, fn_types),
+                    Operand::Shr =>
+                        mir::Value::shr(lhs, rhs,
+                            &mut function.raw, block, fn_types),
+
+                    Operand::EqualsEquals =>
+                        mir::Value::eq(lhs, rhs,
+                            &mut function.raw, block, fn_types),
+                    Operand::NotEquals =>
+                        mir::Value::neq(lhs, rhs,
+                            &mut function.raw, block, fn_types),
+                    Operand::LessThan =>
+                        mir::Value::lt(lhs, rhs,
+                            &mut function.raw, block, fn_types),
+                    Operand::LessThanEquals =>
+                        mir::Value::lte(lhs, rhs,
+                            &mut function.raw, block, fn_types),
+                    Operand::GreaterThan =>
+                        mir::Value::gt(lhs, rhs,
+                            &mut function.raw, block, fn_types),
+                    Operand::GreaterThanEquals =>
+                        mir::Value::gte(lhs, rhs,
+                            &mut function.raw, block, fn_types),
+
+                    op => panic!("unimplemented: {:?}", op),
+                }
+            }
+            ExprKind::Call {
+                callee,
+                args,
+            } => {
+                mir::Value::call(callee,
+                    args.into_iter().map(|e|
+                        e.translate(function, block, fn_types)).collect(),
+                    &mut function.raw, block, fn_types)
+            }
+            e => panic!("unimplemented: {:?}", e),
+        }
+    }
+
+    pub fn translate_block(body: Block, function: &mut Function,
+            block: &mut mir::Block, fn_types: &HashMap<String, ty::Function>)
+            -> mir::Value {
         if body.stmts.len() != 0 {
             unimplemented!()
         }
         if let Some(e) = body.expr {
-            assert!(e.ty.is_final_type());
-            match e.kind {
-                ExprKind::IntLiteral(n) => {
-                    mir::Value::const_int(n, e.ty)
-                }
-                _ => unimplemented!()
-            }
+            e.translate(function, block, fn_types)
         }
         else {
             unimplemented!()

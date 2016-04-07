@@ -46,6 +46,10 @@ fn fib_base(n: u32) -> bool {
 }
 */
 
-fn main() -> u32 {
-    1500
+fn main() -> s32 {
+    test()
+}
+
+fn test() -> s32 {
+    0
 }

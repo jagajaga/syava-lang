@@ -78,8 +78,6 @@ pub enum Operand {
     Xor,
     Or,
 
-    Not,
-
     EqualsEquals,
     NotEquals,
     LessThan,
@@ -89,6 +87,8 @@ pub enum Operand {
 
     AndAnd,
     OrOr,
+
+    Not,
 }
 
 impl Operand {
@@ -387,6 +387,7 @@ impl<'src> Lexer<'src> {
                 }
                 Ok(Token::Operand(Operand::Or))
             }
+            '^' => Ok(Token::Operand(Operand::Xor)),
 
             c if Self::is_start_of_ident(c) => {
                 let ident = self.ident(c);

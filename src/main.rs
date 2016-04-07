@@ -1,5 +1,3 @@
-#![deny(warnings)]
-
 extern crate llvm_sys;
 
 macro_rules! cstr {

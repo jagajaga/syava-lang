@@ -165,11 +165,12 @@ impl Function {
         })
     }
 
-    fn add_body(mut self, body: Block, _ast: &Ast) -> mir::Function {
+    fn add_body(mut self, body: Block, ast: &Ast) -> mir::Function {
         let mut block = self.raw.start_block();
         // let mut locals = HashMap::new();
 
-        let ret = Expr::translate_block(body, &mut self.raw, &mut block);
+        let ret = Expr::translate_block(body, &mut self, &mut block,
+                &ast.function_types);
         block.ret(&mut self.raw, ret);
         self.raw
     }
