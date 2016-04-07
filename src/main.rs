@@ -1,4 +1,4 @@
-#![allow(non_camel_case_types, dead_code)]
+#![deny(warnings)]
 
 extern crate llvm_sys;
 
@@ -9,19 +9,21 @@ macro_rules! cstr {
 }
 
 macro_rules! fl {
-    () => ((file!(), line!()))
+    () => ((file!(), line!()));
+    (line:$expr) => ((file!(), line));
 }
 
-enum either<L, R> {
+enum Either<L, R> {
     Left(L),
     Right(R),
 }
 
 mod parse;
-mod trans;
+mod ast;
 mod ty;
-use parse::lexer;
-use trans::ast;
+mod mir;
+use parse::Lexer;
+use ast::Ast;
 
 fn main() {
     use std::env;
@@ -33,13 +35,19 @@ fn main() {
         .read_to_end(&mut file)
         .unwrap();
     let file = String::from_utf8(file).unwrap();
-    let lexer = lexer::new(&file);
+    let lexer = Lexer::new(&file);
 
-    let ast = match ast::create(lexer) {
+    let ast = match Ast::create(lexer) {
         Ok(ast) => ast,
         Err(e) => panic!("\n{:#?}", e),
     };
-    println!("{}", ast.build().unwrap());
+    let mir = match ast.typeck() {
+        Ok(mir) => mir,
+        Err(e) => panic!("\n{:#?}", e),
+    };
+    println!("{}", mir);
+
+    mir.build()
 }
 
 mod tests;

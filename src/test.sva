@@ -1,9 +1,10 @@
+/*
 // returns 89
 fn main() -> u32 {
     if fib(10 + 5) == fib2(15) {
-        fib(10)
+        fib3(10)
     } else {
-        1
+        !0
     }
 }
 
@@ -23,13 +24,28 @@ fn fib2(n: u32) -> u32 {
         return return 1;
     }
 
-    // {
+    {
         let y = fib(n - 1);
         let z = fib(n - 2);
         y + z
-    // }
+    }
+}
+
+fn fib3(n: u32) -> u32 {
+    let x;
+    if fib_base(n) {
+        x = 1;
+    } else {
+        x = fib(n - 1) + fib(n - 2);
+    }
+    x
 }
 
 fn fib_base(n: u32) -> bool {
     n == 0 || n == 1
+}
+*/
+
+fn main() -> u32 {
+    1500
 }
