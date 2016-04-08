@@ -12,23 +12,39 @@ const END_BLOCK: Block = Block(1);
 pub struct Function {
     ty: ty::Function,
     temporaries: Vec<Ty>,
-    //locals: HashMap<String, Lvalue>,
+    locals: Vec<Ty>,
     blocks: Vec<BlockData>,
 }
 #[derive(Copy, Clone, Debug)]
-struct Temporary(usize);
+pub struct Variable(u32);
+#[derive(Copy, Clone, Debug)]
+struct Temporary(u32);
+#[derive(Copy, Clone, Debug)]
+struct Parameter(u32);
 
 impl Function {
     pub fn new(ty: ty::Function) -> Function {
         let mut ret = Function {
             ty: ty,
             temporaries: Vec::new(),
+            locals: Vec::new(),
             blocks: Vec::new(),
         };
         assert_eq!(START_BLOCK,
             ret.new_block(Lvalue::Return, Terminator::Goto(END_BLOCK)));
         assert_eq!(END_BLOCK,
             ret.new_block(Lvalue::Return, Terminator::Return));
+        let input_types = ret.ty.input().to_owned();
+        {
+            for ty in &input_types {
+                ret.new_local(*ty);
+            }
+            let blk = ret.get_block(&START_BLOCK);
+            for i in 0..input_types.len() as u32 {
+                blk.statements.push(Statement(Lvalue::Variable(Variable(i)),
+                    Value::leaf(ValueLeaf::Parameter(Parameter(i)))))
+            }
+        }
         END_BLOCK.terminate(&mut ret, Terminator::Return);
         ret
     }
@@ -43,14 +59,24 @@ impl Function {
     }
     fn new_tmp(&mut self, ty: Ty) -> Temporary {
         self.temporaries.push(ty);
-        Temporary(self.temporaries.len() - 1)
+        Temporary(self.temporaries.len() as u32 - 1)
+    }
+    pub fn new_local(&mut self, ty: Ty) -> Variable {
+        self.locals.push(ty);
+        Variable(self.locals.len() as u32 - 1)
     }
 
     fn get_block(&mut self, blk: &Block) -> &mut BlockData {
-        &mut self.blocks[blk.0]
+        &mut self.blocks[blk.0 as usize]
     }
     fn get_tmp_ty(&self, tmp: &Temporary) -> Ty {
-        self.temporaries[tmp.0]
+        self.temporaries[tmp.0 as usize]
+    }
+    fn get_par_ty(&self, par: &Parameter) -> Ty {
+        self.ty.input()[par.0 as usize]
+    }
+    fn get_local_ty(&self, var: &Variable) -> Ty {
+        self.locals[var.0 as usize]
     }
 
     fn get_leaf(&mut self, value: Value, block: &Block,
@@ -74,10 +100,11 @@ impl Function {
 
 struct LlFunction {
     mir: Function,
-    //raw: LLVMValueRef,
+    raw: LLVMValueRef,
     builder: LLVMBuilderRef,
     ret_ptr: LLVMValueRef,
     temporaries: Vec<LLVMValueRef>,
+    locals: Vec<LLVMValueRef>,
     blocks: Vec<LLVMBasicBlockRef>,
 }
 
@@ -99,16 +126,22 @@ impl LlFunction {
                 tmps.push(LLVMBuildAlloca(builder, mir_tmp.to_llvm(),
                     cstr!("tmp")));
             }
+            let mut locals = Vec::new();
+            for mir_local in &mir.locals {
+                locals.push(LLVMBuildAlloca(builder, mir_local.to_llvm(),
+                    cstr!("var")));
+            }
 
             let ret_ptr = LLVMBuildAlloca(builder, mir.ty.output().to_llvm(),
                 cstr!("ret"));
 
             let mut self_ = LlFunction {
                 mir: mir,
-                //raw: llfunc,
+                raw: llfunc,
                 builder: builder,
                 ret_ptr: ret_ptr,
                 temporaries: tmps,
+                locals: locals,
                 blocks: blocks,
             };
 
@@ -126,11 +159,21 @@ impl LlFunction {
 
 
     fn get_tmp_ptr(&self, tmp: &Temporary) -> LLVMValueRef {
-        self.temporaries[tmp.0]
+        self.temporaries[tmp.0 as usize]
     }
     fn get_tmp_value(&self, tmp: &Temporary) -> LLVMValueRef {
         unsafe {
-            LLVMBuildLoad(self.builder, self.temporaries[tmp.0], cstr!(""))
+            LLVMBuildLoad(self.builder, self.temporaries[tmp.0 as usize],
+                cstr!(""))
+        }
+    }
+    fn get_local_ptr(&self, var: &Variable) -> LLVMValueRef {
+        self.locals[var.0 as usize]
+    }
+    fn get_local_value(&self, var: &Variable) -> LLVMValueRef {
+        unsafe {
+            LLVMBuildLoad(self.builder, self.locals[var.0 as usize],
+                cstr!(""))
         }
     }
     fn get_block(&self, blk: &Block) -> LLVMBasicBlockRef {
@@ -146,6 +189,8 @@ enum ValueLeaf {
     },
     ConstBool(bool),
     ConstUnit,
+    Parameter(Parameter),
+    Variable(Variable),
     Temporary(Temporary),
 }
 
@@ -159,6 +204,8 @@ impl ValueLeaf {
             ValueLeaf::ConstBool(_) => Ty::Bool,
             ValueLeaf::ConstUnit => Ty::Unit,
             ValueLeaf::Temporary(ref tmp) => function.get_tmp_ty(tmp),
+            ValueLeaf::Parameter(ref par) => function.get_par_ty(par),
+            ValueLeaf::Variable(ref var) => function.get_local_ty(var),
         }
     }
 
@@ -179,6 +226,12 @@ impl ValueLeaf {
             }
             ValueLeaf::Temporary(tmp) => {
                 function.get_tmp_value(&tmp)
+            }
+            ValueLeaf::Parameter(par) => {
+                LLVMGetParam(function.raw, par.0 as u32)
+            }
+            ValueLeaf::Variable(var) => {
+                function.get_local_value(&var)
             }
         }
     }
@@ -225,20 +278,38 @@ pub struct Value(ValueKind);
 
 // --- CONSTRUCTORS ---
 impl Value {
-    // -- literals --
+    // -- leaves --
+    #[inline(always)]
     pub fn const_int(value: u64, ty: Ty) -> Value {
-        Value(ValueKind::Leaf(
+        Value::leaf(
             ValueLeaf::ConstInt {
                 value: value,
                 ty: ty,
             }
-        ))
+        )
     }
+    #[inline(always)]
     pub fn const_bool(value: bool) -> Value {
-        Value(ValueKind::Leaf(ValueLeaf::ConstBool(value)))
+        Value::leaf(ValueLeaf::ConstBool(value))
     }
+    #[inline(always)]
     pub fn const_unit() -> Value {
-        Value(ValueKind::Leaf(ValueLeaf::ConstUnit))
+        Value::leaf(ValueLeaf::ConstUnit)
+    }
+
+    pub fn param(arg_num: u32, function: &mut Function) -> Value {
+        assert!(arg_num < function.ty.input().len() as u32);
+        Value::leaf(ValueLeaf::Variable(Variable(arg_num)))
+    }
+
+    pub fn local(var: Variable) -> Value {
+        Value::leaf(ValueLeaf::Variable(var))
+    }
+
+
+    #[inline(always)]
+    fn leaf(leaf: ValueLeaf) -> Value {
+        Value(ValueKind::Leaf(leaf))
     }
 
     // -- unops --
@@ -645,6 +716,7 @@ impl Value {
 
 #[derive(Copy, Clone, Debug)]
 enum Lvalue {
+    Variable(Variable),
     Temporary(Temporary),
     Return,
 }
@@ -658,6 +730,7 @@ impl Statement {
         let dst = match self.0 {
             Lvalue::Return => function.ret_ptr,
             Lvalue::Temporary(tmp) => function.get_tmp_ptr(&tmp),
+            Lvalue::Variable(var) => function.get_local_ptr(&var),
         };
         LLVMBuildStore(function.builder,
             (self.1).to_llvm(function, llvm_funcs), dst);
@@ -693,9 +766,16 @@ impl Terminator {
                     function.get_block(&else_blk));
             }
             Terminator::Return => {
-                let value = LLVMBuildLoad(function.builder,
-                    function.ret_ptr, cstr!(""));
-                LLVMBuildRet(function.builder, value);
+                match function.mir.ty.output() {
+                    Ty::Unit => {
+                        LLVMBuildRetVoid(function.builder);
+                    },
+                    _ => {
+                        let value = LLVMBuildLoad(function.builder,
+                            function.ret_ptr, cstr!(""));
+                        LLVMBuildRet(function.builder, value);
+                    }
+                }
             }
         }
     }
@@ -740,6 +820,20 @@ impl Block {
 
         std::mem::replace(self, join);
         (then, else_, Value(ValueKind::Leaf(ValueLeaf::Temporary(tmp))))
+    }
+
+    pub fn write_to_var(&mut self, var: Variable, val: Value,
+            function: &mut Function) {
+        let blk = function.get_block(self);
+        blk.statements.push(Statement(Lvalue::Variable(var), val));
+    }
+
+    pub fn write_to_tmp(&mut self, val: Value, function: &mut Function,
+            fn_types: &HashMap<String, ty::Function>) {
+        let ty = val.ty(function, fn_types);
+        let tmp = function.new_tmp(ty);
+        let blk = function.get_block(self);
+        blk.statements.push(Statement(Lvalue::Temporary(tmp), val));
     }
 }
 // terminators
@@ -797,10 +891,26 @@ impl Mir {
     }
 
     pub fn build(self) {
+        use llvm_sys::transforms::scalar::*;
+        use llvm_sys::analysis::*;
+        use llvm_sys::analysis::LLVMVerifierFailureAction::*;
         unsafe {
             let mut main_output = None;
             let mut llvm_functions = HashMap::new();
             let module = LLVMModuleCreateWithName(cstr!(""));
+
+            let optimizer = LLVMCreateFunctionPassManagerForModule(module);
+
+            // NOTE: add optimizations here
+            LLVMAddBasicAliasAnalysisPass(optimizer);
+            LLVMAddInstructionCombiningPass(optimizer);
+            LLVMAddReassociatePass(optimizer);
+            LLVMAddGVNPass(optimizer);
+            LLVMAddCFGSimplificationPass(optimizer);
+            LLVMAddDeadStoreEliminationPass(optimizer);
+
+            LLVMInitializeFunctionPassManager(optimizer);
+
             for (name, function) in &self.functions {
                 if name == "main" {
                     main_output = Some(function.ty.output());
@@ -814,6 +924,8 @@ impl Mir {
             for (name, function) in self.functions {
                 let llfunc = *llvm_functions.get(&name).unwrap();
                 function.build(llfunc, &llvm_functions);
+                LLVMVerifyFunction(llfunc, LLVMAbortProcessAction);
+                LLVMRunFunctionPassManager(optimizer, llfunc);
             }
 
             if let Some(f) = llvm_functions.get("main") {
@@ -874,6 +986,9 @@ impl Mir {
 
 impl std::fmt::Display for Function {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        for (i, var) in self.locals.iter().enumerate() {
+            try!(writeln!(f, "  let var{}: {};", i, var));
+        }
         for (i, tmp) in self.temporaries.iter().enumerate() {
             try!(writeln!(f, "  let tmp{}: {};", i, tmp));
         }
@@ -915,6 +1030,7 @@ impl std::fmt::Display for Lvalue {
         match *self {
             Lvalue::Return => write!(f, "return"),
             Lvalue::Temporary(ref tmp) => write!(f, "tmp{}", tmp.0),
+            Lvalue::Variable(ref var) => write!(f, "var{}", var.0),
         }
     }
 }
@@ -935,6 +1051,8 @@ impl std::fmt::Display for ValueLeaf {
             ValueLeaf::ConstBool(value) => write!(f, "const {}", value),
             ValueLeaf::ConstUnit => write!(f, "const ()"),
             ValueLeaf::Temporary(ref tmp) => write!(f, "tmp{}", tmp.0),
+            ValueLeaf::Parameter(ref par) => write!(f, "arg{}", par.0),
+            ValueLeaf::Variable(ref var) => write!(f, "var{}", var.0),
         }
     }
 }
@@ -1009,8 +1127,8 @@ impl std::fmt::Display for Mir {
                 try!(write!(f, "{}", inputs[inputs.len() - 1]));
             }
             try!(writeln!(f, ") -> {} {{", function.ty.output()));
-            try!(writeln!(f, "{}", function));
-            try!(writeln!(f, "}}"));
+            try!(write!(f, "{}", function));
+            try!(writeln!(f, "}}\n"));
         }
         Ok(())
     }
@@ -1027,19 +1145,6 @@ impl module {
     fn new(name: &str) -> module {
         use llvm_sys::transforms::scalar::*;
         unsafe {
-            let raw = LLVMModuleCreateWithName(CString::new(name)
-                .expect("passed a string with a nul to module::new").as_ptr());
-            let opt = LLVMCreateFunctionPassManagerForModule(raw);
-
-            // NOTE: add optimizations here
-            LLVMAddBasicAliasAnalysisPass(opt);
-            LLVMAddInstructionCombiningPass(opt);
-            LLVMAddReassociatePass(opt);
-            LLVMAddGVNPass(opt);
-            LLVMAddCFGSimplificationPass(opt);
-            LLVMAddDeadStoreEliminationPass(opt);
-
-            LLVMInitializeFunctionPassManager(opt);
 
             module {
                 raw: raw,

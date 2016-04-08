@@ -46,14 +46,15 @@ fn fib_base(n: u32) -> bool {
 }
 */
 
-fn main() -> s32 {
-    test()
+fn main() -> u32 {
+    fib(10)
 }
 
-fn test() -> s32 {
-    if true {
-        1 + 2 + 3 + 4
+fn fib(n: u32) -> u32 {
+    let x = if n == 0 || n == 1 {
+        1
     } else {
-        0
-    }
+        fib(n - 1) + fib(n - 2)
+    };
+    x
 }

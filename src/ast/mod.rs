@@ -169,8 +169,9 @@ impl Function {
         let mut block = self.raw.start_block();
         // let mut locals = HashMap::new();
 
+        let mut locals = HashMap::new();
         let ret = Expr::translate_block(body, &mut self, &mut block,
-                &ast.function_types);
+                &mut locals, &ast.function_types);
         block.finish(&mut self.raw, ret);
         self.raw
     }
