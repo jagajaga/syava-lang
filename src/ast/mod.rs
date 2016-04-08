@@ -171,7 +171,7 @@ impl Function {
 
         let ret = Expr::translate_block(body, &mut self, &mut block,
                 &ast.function_types);
-        block.ret(&mut self.raw, ret);
+        block.finish(&mut self.raw, ret);
         self.raw
     }
 }

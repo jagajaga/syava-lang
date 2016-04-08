@@ -51,5 +51,9 @@ fn main() -> s32 {
 }
 
 fn test() -> s32 {
-    0
+    if true {
+        1 + 2 + 3 + 4
+    } else {
+        0
+    }
 }

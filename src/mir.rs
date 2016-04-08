@@ -25,8 +25,10 @@ impl Function {
             temporaries: Vec::new(),
             blocks: Vec::new(),
         };
-        assert_eq!(START_BLOCK, ret.new_block());
-        assert_eq!(END_BLOCK, ret.new_block());
+        assert_eq!(START_BLOCK,
+            ret.new_block(Lvalue::Return, Terminator::Goto(END_BLOCK)));
+        assert_eq!(END_BLOCK,
+            ret.new_block(Lvalue::Return, Terminator::Return));
         END_BLOCK.terminate(&mut ret, Terminator::Return);
         ret
     }
@@ -35,8 +37,8 @@ impl Function {
         START_BLOCK
     }
 
-    fn new_block(&mut self) -> Block {
-        self.blocks.push(BlockData::new());
+    fn new_block(&mut self, expr: Lvalue, term: Terminator) -> Block {
+        self.blocks.push(BlockData::new(expr, term));
         Block(self.blocks.len() - 1)
     }
     fn new_tmp(&mut self, ty: Ty) -> Temporary {
@@ -117,8 +119,7 @@ impl LlFunction {
                 for stmt in blk.statements {
                     stmt.to_llvm(&mut self_, llvm_funcs);
                 }
-                blk.terminator.expect("terminator")
-                    .to_llvm(&self_);
+                blk.terminator.to_llvm(&self_);
             }
         }
     }
@@ -143,6 +144,8 @@ enum ValueLeaf {
         value: u64,
         ty: Ty,
     },
+    ConstBool(bool),
+    ConstUnit,
     Temporary(Temporary),
 }
 
@@ -153,6 +156,8 @@ impl ValueLeaf {
                 ty,
                 ..
             } => ty,
+            ValueLeaf::ConstBool(_) => Ty::Bool,
+            ValueLeaf::ConstUnit => Ty::Unit,
             ValueLeaf::Temporary(ref tmp) => function.get_tmp_ty(tmp),
         }
     }
@@ -164,6 +169,13 @@ impl ValueLeaf {
                 ty,
             } => {
                 LLVMConstInt(ty.to_llvm(), value, false as LLVMBool)
+            }
+            ValueLeaf::ConstBool(value) => {
+                LLVMConstInt(Ty::Bool.to_llvm(), value as u64,
+                    false as LLVMBool)
+            }
+            ValueLeaf::ConstUnit => {
+                LLVMConstStruct([].as_mut_ptr(), 0, false as LLVMBool)
             }
             ValueLeaf::Temporary(tmp) => {
                 function.get_tmp_value(&tmp)
@@ -221,6 +233,12 @@ impl Value {
                 ty: ty,
             }
         ))
+    }
+    pub fn const_bool(value: bool) -> Value {
+        Value(ValueKind::Leaf(ValueLeaf::ConstBool(value)))
+    }
+    pub fn const_unit() -> Value {
+        Value(ValueKind::Leaf(ValueLeaf::ConstUnit))
     }
 
     // -- unops --
@@ -649,6 +667,11 @@ impl Statement {
 #[derive(Debug)]
 enum Terminator {
     Goto(Block),
+    If {
+        cond: ValueLeaf,
+        then_blk: Block,
+        else_blk: Block,
+    },
     // Normal return; should only happen in the end block
     Return,
 }
@@ -659,6 +682,16 @@ impl Terminator {
             Terminator::Goto(b) => {
                 LLVMBuildBr(function.builder, function.get_block(&b));
             },
+            Terminator::If {
+                cond,
+                then_blk,
+                else_blk,
+            } => {
+                let cond = cond.to_llvm(function);
+                LLVMBuildCondBr(function.builder, cond,
+                    function.get_block(&then_blk),
+                    function.get_block(&else_blk));
+            }
             Terminator::Return => {
                 let value = LLVMBuildLoad(function.builder,
                     function.ret_ptr, cstr!(""));
@@ -672,29 +705,77 @@ impl Terminator {
 pub struct Block(usize);
 
 impl Block {
-    pub fn ret(self, function: &mut Function, value: Value) {
+    pub fn if_else(&mut self, ty: Ty, cond: Value, function: &mut Function,
+            fn_types: &HashMap<String, ty::Function>)
+            -> (Block, Block, Value) {
+        let cond = function.get_leaf(cond, self, fn_types);
+        let tmp = function.new_tmp(ty);
+
+        let then = function.new_block(Lvalue::Temporary(tmp),
+            Terminator::Goto(Block(0)));
+        let else_ = function.new_block(Lvalue::Temporary(tmp),
+            Terminator::Goto(Block(0)));
+        // terminator is not permanent
+
+        let (expr, term) = {
+            let blk = function.get_block(self);
+            let term = std::mem::replace(&mut blk.terminator,
+                Terminator::If {
+                    cond: cond,
+                    then_blk: Block(then.0),
+                    else_blk: Block(else_.0)
+                });
+            (blk.expr, term)
+        };
+        let join = function.new_block(expr, term);
+
+        {
+            let then_blk = function.get_block(&then);
+            then_blk.terminator = Terminator::Goto(Block(join.0));
+        }
+        {
+            let else_blk = function.get_block(&else_);
+            else_blk.terminator = Terminator::Goto(Block(join.0));
+        }
+
+        std::mem::replace(self, join);
+        (then, else_, Value(ValueKind::Leaf(ValueLeaf::Temporary(tmp))))
+    }
+}
+// terminators
+impl Block {
+    /*
+    pub fn early_ret(self, function: &mut Function, value: Value) {
         let blk = function.get_block(&self);
         blk.statements.push(Statement(Lvalue::Return, value));
-        blk.terminator = Some(Terminator::Goto(END_BLOCK));
+        blk.terminator = Terminator::Goto(END_BLOCK);
+    }
+    */
+
+    pub fn finish(self, function: &mut Function, value: Value) {
+        let blk = function.get_block(&self);
+        blk.statements.push(Statement(blk.expr, value));
     }
 
     fn terminate(&self, function: &mut Function, terminator: Terminator) {
         let blk = function.get_block(self);
-        blk.terminator = Some(terminator);
+        blk.terminator = terminator;
     }
 }
 
 #[derive(Debug)]
 struct BlockData {
+    expr: Lvalue,
     statements: Vec<Statement>,
-    terminator: Option<Terminator>,
+    terminator: Terminator,
 }
 
 impl BlockData {
-    fn new() -> BlockData {
+    fn new(expr: Lvalue, term: Terminator) -> BlockData {
         BlockData {
+            expr: expr,
             statements: Vec::new(),
-            terminator: None,
+            terminator: term,
         }
     }
 }
@@ -801,9 +882,7 @@ impl std::fmt::Display for Function {
             for stmt in &block.statements {
                 try!(writeln!(f, "    {};", stmt));
             }
-            if let Some(ref t) = block.terminator {
-                try!(writeln!(f, "    {};", t));
-            }
+            try!(writeln!(f, "    {};", block.terminator));
             try!(writeln!(f, "  }}"));
         }
         Ok(())
@@ -815,6 +894,12 @@ impl std::fmt::Display for Terminator {
         match *self {
             Terminator::Goto(ref b) => write!(f, "goto -> bb{}", b.0),
             Terminator::Return => write!(f, "return"),
+            Terminator::If {
+                ref cond,
+                ref then_blk,
+                ref else_blk,
+            } => write!(f, "if({}) -> [true: bb{}, false: bb{}]", cond,
+                then_blk.0, else_blk.0),
         }
     }
 }
@@ -847,6 +932,8 @@ impl std::fmt::Display for ValueLeaf {
                     ty => panic!("ICE: non-integer typed integer: {}", ty),
                 }
             },
+            ValueLeaf::ConstBool(value) => write!(f, "const {}", value),
+            ValueLeaf::ConstUnit => write!(f, "const ()"),
             ValueLeaf::Temporary(ref tmp) => write!(f, "tmp{}", tmp.0),
         }
     }

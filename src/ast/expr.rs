@@ -651,14 +651,21 @@ impl Expr {
     }
 }
 
+// into mir
 impl Expr {
     pub fn translate(self, function: &mut Function,
-            block: &mir::Block, fn_types: &HashMap<String, ty::Function>)
+            block: &mut mir::Block, fn_types: &HashMap<String, ty::Function>)
             -> mir::Value {
         assert!(self.ty.is_final_type());
         match self.kind {
             ExprKind::IntLiteral(n) => {
                 mir::Value::const_int(n, self.ty)
+            }
+            ExprKind::BoolLiteral(b) => {
+                mir::Value::const_bool(b)
+            }
+            ExprKind::UnitLiteral => {
+                mir::Value::const_unit()
             }
             ExprKind::Pos(e) => {
                 let inner = e.translate(function, block, fn_types);
@@ -745,6 +752,24 @@ impl Expr {
                         e.translate(function, block, fn_types)).collect(),
                     &mut function.raw, block, fn_types)
             }
+            ExprKind::If {
+                condition,
+                then_value,
+                else_value,
+            } => {
+                let cond = condition.translate(function, block, fn_types);
+                let (mut then_blk, mut else_blk, res) =
+                    block.if_else(self.ty, cond, &mut function.raw, fn_types);
+
+                let expr = Self::translate_block(*then_value, function,
+                    &mut then_blk, fn_types);
+                then_blk.finish(&mut function.raw, expr);
+
+                let expr = Self::translate_block(*else_value, function,
+                    &mut else_blk, fn_types);
+                else_blk.finish(&mut function.raw, expr);
+                res
+            }
             e => panic!("unimplemented: {:?}", e),
         }
     }
@@ -763,297 +788,3 @@ impl Expr {
         }
     }
 }
-
-
-/*
-// translation
-impl Expr {
-    pub fn translate_out<'a>(self, out: Option<&Lvalue>,
-            function: &'a Function,
-            locals: &mut HashMap<String, Lvalue<'a>>,
-            block: &mut mir::Block<'a>, ast: &Ast) {
-        assert!(self.ty.is_final_type(), "{:?}", self.ty);
-        match self.kind {
-            ExprKind::Binop {
-                op: Operand::OrOr,
-                lhs,
-                rhs,
-            } => {
-                Expr {
-                    kind: ExprKind::If {
-                        condition: lhs,
-                        then_value:
-                            Box::new(Block::expr(Expr::bool_lit(true))),
-                        else_value: Box::new(Block::expr(*rhs)),
-                    },
-                    ty: self.ty,
-                }.translate_out(out, function, locals, block, ast)
-            }
-            ExprKind::Binop {
-                op: Operand::AndAnd,
-                lhs,
-                rhs,
-            } => {
-                Expr {
-                    kind: ExprKind::If {
-                        condition:
-                            Box::new(Expr::not(*lhs, Some(Ty::Bool))),
-                        then_value:
-                            Box::new(Block::expr(Expr::bool_lit(false))),
-                        else_value: Box::new(Block::expr(*rhs)),
-                    },
-                    ty: self.ty,
-                }.translate_out(out, function, locals, block, ast)
-            }
-            ExprKind::If {
-                condition,
-                then_value,
-                else_value,
-            } => {
-                let _cond = if condition.requires_out_ptr() {
-                    let cond_ptr = Lvalue::new(block, Ty::Bool, None);
-                    condition.translate_out(Some(&cond_ptr),
-                        function, locals, block, ast);
-                    cond_ptr.read(block)
-                } else {
-                    condition.translate_value(function, locals, block, ast)
-                };
-                let mut then_blk = mir::Block::new(&function.raw);
-                let mut else_blk = mir::Block::new(&function.raw);
-                let join_blk = mir::Block::new(&function.raw);
-                //block.conditional_branch(cond, &then_blk, &else_blk);
-
-                let value = Self::translate_block(*then_value, self.ty,
-                    function, locals, &mut then_blk, ast);
-                if let Some(ptr) = out {
-                    ptr.write(value, &then_blk);
-                }
-                //then_blk.branch(&join_blk);
-
-                let value = Self::translate_block(*else_value, self.ty,
-                    function, locals, &mut else_blk, ast);
-                if let Some(ptr) = out {
-                    ptr.write(value, &else_blk);
-                }
-                //else_blk.branch(&join_blk);
-
-                *block = join_blk;
-            }
-            _ => {
-                let value = self.translate_value(function, locals, block, ast);
-                if let Some(ptr) = out {
-                    ptr.write(value, block);
-                }
-            }
-        }
-    }
-
-    fn translate_value<'a>(self, function: &'a Function,
-            locals: &mut HashMap<String, Lvalue<'a>>,
-            block: &mut mir::Block<'a>, ast: &Ast) -> Value {
-        match self.kind {
-            k @ ExprKind::Binop { op: Operand::AndAnd, .. }
-            | k @ ExprKind::Binop { op: Operand::OrOr, .. }
-            | k @ ExprKind::If { .. } => {
-                panic!("ICE: this expr should be passed to \
-                    translate_out: {:?}", k)
-            }
-            ExprKind::IntLiteral(value) => {
-                Value::int_literal(self.ty, value)
-            }
-            ExprKind::BoolLiteral(b) => {
-                Value::bool_literal(self.ty, b)
-            }
-            ExprKind::UnitLiteral => {
-                Value::unit_literal(self.ty)
-            }
-            ExprKind::Variable(ref name) => {
-                if let Some(val) = locals.get(name) {
-                    assert!(val.ty == self.ty);
-                    val.read(block)
-                } else {
-                    Value::parameter(self.ty, function, name)
-                }
-            }
-            ExprKind::Block(blk) => {
-                Self::translate_block(*blk, self.ty,
-                    function, locals, block, ast)
-            }
-            ExprKind::Binop {
-                op,
-                lhs,
-                rhs,
-            } => {
-                let lhs = if lhs.requires_out_ptr() {
-                    let lhs_ptr = Lvalue::new(block, lhs.ty, None);
-                    lhs.translate_out(Some(&lhs_ptr),
-                        function, locals, block, ast);
-                    lhs_ptr.read(block)
-                } else {
-                    lhs.translate_value(function, locals, block, ast)
-                };
-
-                let rhs = if rhs.requires_out_ptr() {
-                    let rhs_ptr = Lvalue::new(block, rhs.ty, None);
-                    rhs.translate_out(Some(&rhs_ptr),
-                        function, locals, block, ast);
-                    rhs_ptr.read(block)
-                } else {
-                    rhs.translate_value(function, locals, block, ast)
-                };
-
-                Value::binop(&op, lhs, rhs, block)
-            }
-            ExprKind::Plus(inner) => {
-                if inner.requires_out_ptr() {
-                    let ptr = Lvalue::new(block, inner.ty, None);
-                    inner.translate_out(Some(&ptr),
-                        function, locals, block, ast);
-                    ptr.read(block)
-                } else {
-                    inner.translate_value(function, locals, block, ast)
-                }
-            }
-            ExprKind::Minus(inner) => {
-                if inner.requires_out_ptr() {
-                    let ptr = Lvalue::new(block, inner.ty, None);
-                    inner.translate_out(Some(&ptr),
-                        function, locals, block, ast);
-                    ptr.read(block).neg(block)
-                } else {
-                    inner.translate_value(function, locals, block, ast)
-                        .neg(block)
-                }
-            }
-            ExprKind::Not(inner) => {
-                if inner.requires_out_ptr() {
-                    let ptr = Lvalue::new(block, inner.ty, None);
-                    inner.translate_out(Some(&ptr),
-                        function, locals, block, ast);
-                    ptr.read(block).not(block)
-                } else {
-                    inner.translate_value(function, locals, block, ast)
-                        .not(block)
-                }
-            }
-            ExprKind::Call {
-                callee,
-                args,
-            } => {
-                let mut llvm_args = Vec::new();
-                for arg in args.into_iter() {
-                    llvm_args.push(
-                    if arg.requires_out_ptr() {
-                        let ptr = Lvalue::new(block, arg.ty, None);
-                        arg.translate_out(Some(&ptr),
-                            function, locals, block, ast);
-                        ptr.read(block)
-                    } else {
-                        arg.translate_value(function, locals, block, ast)
-                    })
-                }
-                ast.call(&callee, block, llvm_args)
-            }
-            ExprKind::Return(expr) => {
-                let ret = if expr.requires_out_ptr() {
-                    let ret_ptr = Lvalue::new(block, expr.ty, Some("ret"));
-                    expr.translate_out(Some(&ret_ptr),
-                        function, locals, block, ast);
-                    ret_ptr.read(block)
-                } else {
-                    expr.translate_value(function, locals, block, ast)
-                };
-                block.ret(ret.raw);
-                Value::unit_literal(Ty::Unit) // unimportant what this is
-            }
-            ExprKind::Assign {
-                dst,
-                src,
-            } => {
-                let lvalue = dst.lvalue(function, locals)
-                    .expect("ICE: non-lvalue expression lhs of assignment");
-                src.translate_out(Some(&lvalue),
-                    function, locals, block, ast);
-                Value::unit_literal(Ty::Unit)
-            }
-        }
-    }
-
-    fn lvalue<'a>(self, _function: &Function,
-            locals: &HashMap<String, Lvalue<'a>>)
-            -> Option<Lvalue<'a>> {
-        match self.kind {
-            ExprKind::Variable(s) => {
-                if let Some(lv) = locals.get(&s) {
-                    Some(*lv)
-                } else {
-                    None
-                    //lvalue::parameter(function, &s)
-                }
-            }
-            _ => None
-        }
-    }
-
-    pub fn translate_block<'a>(body: Block, _blk_ty: Ty,
-            function: &'a Function, locals: &mut HashMap<String, Lvalue<'a>>,
-            block: &mut mir::Block<'a>, ast: &Ast) -> Value {
-        let _locals_at_start = locals.clone();
-        for st in body.stmts {
-            match st {
-                Stmt::Let {
-                    name,
-                    ty,
-                    value,
-                } => {
-                    let local = Lvalue::new(block, ty, Some(&name));
-                    if let Some(v) = value {
-                        v.translate_out(Some(&local),
-                            function, locals, block, ast);
-                    }
-                    locals.insert(name, local);
-                }
-                Stmt::Expr(e) => {
-                    e.translate_out(None, function, locals, block, ast);
-                }
-            }
-        }
-        Value::unit_literal(Ty::Unit)
-
-        /*
-        if block.is_live() {
-            if let Some(e) = body.1 {
-                let ret = if e.requires_out_ptr() {
-                    let ret_ptr = lvalue::new(&block, blk_ty, Some("ret"));
-                    e.translate_out(Some(&ret_ptr),
-                        function, locals, block, ast);
-                    ret_ptr.read(&block)
-                } else {
-                    e.translate_value(function, locals, block, ast)
-                };
-                ret
-            } else {
-                *locals = locals_at_start;
-                value::undef(blk_ty)
-            }
-        } else {
-            *locals = locals_at_start;
-            value::unit_literal(ty::Unit)
-        }
-        */
-    }
-
-    fn requires_out_ptr(&self) -> bool {
-        match self.kind {
-            ExprKind::Binop { op: Operand::OrOr, .. }
-            | ExprKind::Binop { op: Operand::AndAnd, .. }
-            | ExprKind::If { .. } => {
-                true
-            }
-            _ => false
-        }
-    }
-}
-*/
-
-
