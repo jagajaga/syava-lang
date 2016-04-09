@@ -1,2 +1,2 @@
 #! /bin/sh
-cargo run -- src/test.sva
+cargo run -- src/test.sva $@
