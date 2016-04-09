@@ -1,8 +1,10 @@
+extern crate libc;
 extern crate llvm_sys;
+extern crate argparse;
 
 macro_rules! cstr {
     ($s:expr) => (
-        concat!($s, "\0").as_ptr() as *const i8
+        concat!($s, "\0").as_ptr() as *const ::libc::c_char
     )
 }
 
@@ -24,14 +26,30 @@ use parse::Lexer;
 use ast::Ast;
 
 fn main() {
-    use std::env;
     use std::io::Read;
+
+    let mut name = "".to_owned();
+    let mut print_mir = false;
+    let mut print_llir = false;
+    {
+        use argparse::{ArgumentParser, Store, StoreTrue};
+
+        let mut ap = ArgumentParser::new();
+        ap.set_description("The syavac compiler for the syava language.\n\
+            Written in Rust.");
+        ap.refer(&mut name).required().add_argument("name", Store,
+            "The file to compile");
+        ap.refer(&mut print_mir).add_option(&["--print-mir"], StoreTrue,
+            "Pass if you would like to print the generated MIR");
+        ap.refer(&mut print_llir).add_option(&["--print-llir"], StoreTrue,
+            "Pass if you would like to print the generated LLVM IR");
+
+        ap.parse_args_or_exit();
+    }
+
     let mut file = Vec::new();
-    let input = env::args().nth(1).expect("Provide a path to the source");
-    std::fs::File::open(input)
-        .unwrap()
-        .read_to_end(&mut file)
-        .unwrap();
+    std::fs::File::open(&name).expect(&name)
+        .read_to_end(&mut file).unwrap();
     let file = String::from_utf8(file).unwrap();
     let lexer = Lexer::new(&file);
 
@@ -43,9 +61,11 @@ fn main() {
         Ok(mir) => mir,
         Err(e) => panic!("\n{:#?}", e),
     };
-    println!("{}", mir);
+    if print_mir {
+        println!("{}", mir);
+    }
 
-    mir.build()
+    mir.build(print_llir)
 }
 
 mod tests;

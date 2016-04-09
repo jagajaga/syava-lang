@@ -911,7 +911,7 @@ impl Mir {
         self.functions.insert(name, func);
     }
 
-    pub fn build(self) {
+    pub fn build(self, print_llir: bool) {
         use llvm_sys::transforms::scalar::*;
         use llvm_sys::analysis::*;
         use llvm_sys::analysis::LLVMVerifierFailureAction::*;
@@ -950,20 +950,23 @@ impl Mir {
             }
 
             if let Some(f) = llvm_functions.get("main") {
-                Self::run(main_output.unwrap(), module, *f)
+                Self::run(main_output.unwrap(), module, *f, print_llir)
             }
         }
     }
 
-    unsafe fn run(ty: Ty, module: LLVMModuleRef, function: LLVMValueRef) {
+    unsafe fn run(ty: Ty, module: LLVMModuleRef, function: LLVMValueRef,
+            print_llir: bool) {
         use llvm_sys::analysis::*;
         use llvm_sys::execution_engine::*;
         use llvm_sys::target::*;
         use std::io::Write;
 
-        LLVMDumpModule(module);
+        if print_llir {
+            LLVMDumpModule(module);
+        }
 
-        let mut error: *mut i8 = std::mem::uninitialized();
+        let mut error: *mut ::libc::c_char = std::mem::uninitialized();
         LLVMVerifyModule(module,
             LLVMVerifierFailureAction::LLVMAbortProcessAction, &mut error);
         LLVMDisposeMessage(error);
