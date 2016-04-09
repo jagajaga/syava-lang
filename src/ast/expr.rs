@@ -40,7 +40,7 @@ pub enum ExprKind {
     UnitLiteral,
     Return(Box<Expr>),
     Assign {
-        dst: Box<Expr>,
+        dst: String,
         src: Box<Expr>
     },
 }
@@ -138,10 +138,10 @@ impl Expr {
         }
     }
 
-    pub fn assign(dst: Expr, src: Expr) -> Expr {
+    pub fn assign(dst: String, src: Expr) -> Expr {
         Expr {
             kind: ExprKind::Assign {
-                dst: Box::new(dst),
+                dst: dst,
                 src: Box::new(src),
             },
             ty: Ty::Unit,
@@ -263,6 +263,7 @@ impl Expr {
                     Err(AstError::UndefinedVariableName {
                         name: name.clone(),
                         function: function.name.clone(),
+                        compiler: fl!(),
                     })
                 }
             }
@@ -422,23 +423,28 @@ impl Expr {
                    uf, variables, function, functions)
             }
             ExprKind::Assign {
-                ref mut dst,
+                ref dst,
                 ref mut src,
             } => {
                 debug_assert!(self.ty == Ty::Unit);
-                src.ty.generate_inference_id(uf);
-                try!(dst.unify_type(src.ty,
-                    uf, variables, function, functions));
-                try!(src.unify_type(dst.ty,
-                    uf, variables, function, functions));
-                uf.unify(self.ty, to_unify).map_err(|()|
-                    AstError::CouldNotUnify {
-                        first: Ty::Unit,
-                        second: to_unify,
+                if let Some(&ty) = variables.get(dst) {
+                    try!(src.unify_type(ty,
+                        uf, variables, function, functions));
+                    uf.unify(self.ty, to_unify).map_err(|()|
+                        AstError::CouldNotUnify {
+                            first: Ty::Unit,
+                            second: to_unify,
+                            function: function.name.clone(),
+                            compiler: fl!(),
+                        }
+                    )
+                } else {
+                    Err(AstError::UndefinedVariableName {
+                        name: dst.clone(),
                         function: function.name.clone(),
                         compiler: fl!(),
-                    }
-                )
+                    })
+                }
             }
         }
     }
@@ -626,6 +632,13 @@ impl Expr {
                 Self::finalize_block_ty(else_value, uf, function)
             }
             ExprKind::Block(ref mut blk) => {
+                self.ty = match uf.actual_ty(self.ty) {
+                    Some(t) => t,
+                    None => return Err(AstError::NoActualType {
+                        function: function.name.clone(),
+                        compiler: fl!(),
+                    })
+                };
                 Self::finalize_block_ty(blk, uf, function)
             }
             ExprKind::Return(ref mut ret) => {
@@ -641,10 +654,9 @@ impl Expr {
                 ret.finalize_type(uf, function)
             }
             ExprKind::Assign {
-                ref mut dst,
                 ref mut src,
+                ..
             } => {
-                try!(dst.finalize_type(uf, function));
                 src.finalize_type(uf, function)
             }
         }
@@ -654,41 +666,60 @@ impl Expr {
 // into mir
 impl Expr {
     pub fn translate(self, function: &mut Function,
-            block: &mut mir::Block,
+            mut block: mir::Block,
             locals: &mut HashMap<String, mir::Variable>,
             fn_types: &HashMap<String, ty::Function>)
-            -> mir::Value {
-        assert!(self.ty.is_final_type());
+            -> (mir::Value, Option<mir::Block>) {
+        assert!(self.ty.is_final_type(), "not final type: {:?}", self);
         match self.kind {
             ExprKind::IntLiteral(n) => {
-                mir::Value::const_int(n, self.ty)
+                (mir::Value::const_int(n, self.ty), Some(block))
             }
             ExprKind::BoolLiteral(b) => {
-                mir::Value::const_bool(b)
+                (mir::Value::const_bool(b), Some(block))
             }
             ExprKind::UnitLiteral => {
-                mir::Value::const_unit()
+                (mir::Value::const_unit(), Some(block))
             }
             ExprKind::Variable(name) => {
                 if let Some(var) = locals.get(&name) {
-                    mir::Value::local(*var)
+                    (mir::Value::local(*var), Some(block))
                 } else if let Some(&(num, _)) = function.args.get(&name) {
-                    mir::Value::param(num as u32, &mut function.raw)
+                    (mir::Value::param(num as u32, &mut function.raw),
+                        Some(block))
                 } else {
                     panic!("ICE: unknown variable: {}", name)
                 }
             }
             ExprKind::Pos(e) => {
-                let inner = e.translate(function, block, locals, fn_types);
-                mir::Value::pos(inner, &mut function.raw, block, fn_types)
+                let (inner, blk) =
+                    e.translate(function, block, locals, fn_types);
+                if let Some(mut blk) = blk {
+                    (mir::Value::pos(inner, &mut function.raw, &mut blk,
+                        fn_types), Some(blk))
+                } else {
+                    (mir::Value::const_unit(), None)
+                }
             }
             ExprKind::Neg(e) => {
-                let inner = e.translate(function, block, locals, fn_types);
-                mir::Value::neg(inner, &mut function.raw, block, fn_types)
+                let (inner, blk) =
+                    e.translate(function, block, locals, fn_types);
+                if let Some(mut blk) = blk {
+                    (mir::Value::neg(inner, &mut function.raw, &mut blk,
+                        fn_types), Some(blk))
+                } else {
+                    (mir::Value::const_unit(), None)
+                }
             }
             ExprKind::Not(e) => {
-                let inner = e.translate(function, block, locals, fn_types);
-                mir::Value::not(inner, &mut function.raw, block, fn_types)
+                let (inner, blk) =
+                    e.translate(function, block, locals, fn_types);
+                if let Some(mut blk) = blk {
+                    (mir::Value::not(inner, &mut function.raw, &mut blk,
+                        fn_types), Some(blk))
+                } else {
+                    (mir::Value::const_unit(), None)
+                }
             }
             ExprKind::Binop {
                 op: Operand::AndAnd,
@@ -725,129 +756,211 @@ impl Expr {
                 lhs,
                 rhs,
             } => {
-                let lhs = lhs.translate(function, block, locals, fn_types);
-                let rhs = rhs.translate(function, block, locals, fn_types);
-                match op {
+                let (lhs, blk) = {
+                    let (lhs, blk) =
+                        lhs.translate(function, block, locals, fn_types);
+                    if let Some(blk) = blk {
+                        (lhs, blk)
+                    } else {
+                        return (lhs, None);
+                    }
+                };
+                let (rhs, mut blk) = {
+                    let (rhs, blk) =
+                        rhs.translate(function, blk, locals, fn_types);
+                    if let Some(blk) = blk {
+                        (rhs, blk)
+                    } else {
+                        return (rhs, None);
+                    }
+                };
+                (match op {
                     Operand::Plus =>
                         mir::Value::add(lhs, rhs,
-                            &mut function.raw, block, fn_types),
+                            &mut function.raw, &mut blk, fn_types),
                     Operand::Minus =>
                         mir::Value::sub(lhs, rhs,
-                            &mut function.raw, block, fn_types),
+                            &mut function.raw, &mut blk, fn_types),
 
                     Operand::Mul =>
                         mir::Value::mul(lhs, rhs,
-                            &mut function.raw, block, fn_types),
+                            &mut function.raw, &mut blk, fn_types),
                     Operand::Div =>
                         mir::Value::div(lhs, rhs,
-                            &mut function.raw, block, fn_types),
+                            &mut function.raw, &mut blk, fn_types),
                     Operand::Rem =>
                         mir::Value::rem(lhs, rhs,
-                            &mut function.raw, block, fn_types),
+                            &mut function.raw, &mut blk, fn_types),
 
                     Operand::And =>
                         mir::Value::and(lhs, rhs,
-                            &mut function.raw, block, fn_types),
+                            &mut function.raw, &mut blk, fn_types),
                     Operand::Xor =>
                         mir::Value::xor(lhs, rhs,
-                            &mut function.raw, block, fn_types),
+                            &mut function.raw, &mut blk, fn_types),
                     Operand::Or =>
                         mir::Value::or(lhs, rhs,
-                            &mut function.raw, block, fn_types),
+                            &mut function.raw, &mut blk, fn_types),
 
                     Operand::Shl =>
                         mir::Value::shl(lhs, rhs,
-                            &mut function.raw, block, fn_types),
+                            &mut function.raw, &mut blk, fn_types),
                     Operand::Shr =>
                         mir::Value::shr(lhs, rhs,
-                            &mut function.raw, block, fn_types),
+                            &mut function.raw, &mut blk, fn_types),
 
                     Operand::EqualsEquals =>
                         mir::Value::eq(lhs, rhs,
-                            &mut function.raw, block, fn_types),
+                            &mut function.raw, &mut blk, fn_types),
                     Operand::NotEquals =>
                         mir::Value::neq(lhs, rhs,
-                            &mut function.raw, block, fn_types),
+                            &mut function.raw, &mut blk, fn_types),
                     Operand::LessThan =>
                         mir::Value::lt(lhs, rhs,
-                            &mut function.raw, block, fn_types),
+                            &mut function.raw, &mut blk, fn_types),
                     Operand::LessThanEquals =>
                         mir::Value::lte(lhs, rhs,
-                            &mut function.raw, block, fn_types),
+                            &mut function.raw, &mut blk, fn_types),
                     Operand::GreaterThan =>
                         mir::Value::gt(lhs, rhs,
-                            &mut function.raw, block, fn_types),
+                            &mut function.raw, &mut blk, fn_types),
                     Operand::GreaterThanEquals =>
                         mir::Value::gte(lhs, rhs,
-                            &mut function.raw, block, fn_types),
+                            &mut function.raw, &mut blk, fn_types),
 
                     Operand::AndAnd => unreachable!(),
                     Operand::OrOr => unreachable!(),
                     Operand::Not => panic!("ICE: Not (`!`) is not a binop"),
-                }
+                }, Some(blk))
             }
             ExprKind::Call {
                 callee,
                 args,
             } => {
-                mir::Value::call(callee,
-                    args.into_iter().map(|e|
-                        e.translate(function, block, locals, fn_types))
-                        .collect(),
-                    &mut function.raw, block, fn_types)
+                let mut mir_args = Vec::new();
+                for arg in args {
+                    let (arg, blk) = arg.translate(function, block, locals,
+                        fn_types);
+                    if let Some(blk) = blk {
+                        block = blk;
+                    } else {
+                        return (mir::Value::const_unit(), None);
+                    }
+                    mir_args.push(arg);
+                }
+                (mir::Value::call(callee, mir_args,
+                    &mut function.raw, &mut block, fn_types), Some(block))
             }
             ExprKind::If {
                 condition,
                 then_value,
                 else_value,
             } => {
-                let cond = condition.translate(function, block, locals,
-                    fn_types);
-                let (mut then_blk, mut else_blk, res) =
-                    block.if_else(self.ty, cond, &mut function.raw, fn_types);
+                let (cond, blk) = condition.translate(function, block,
+                    locals, fn_types);
+                let (then_blk, else_blk, join, res) = if let Some(blk) = blk {
+                    blk.if_else(self.ty, cond, &mut function.raw, fn_types)
+                } else {
+                    return (mir::Value::const_unit(), None);
+                };
 
-                let expr = Self::translate_block(*then_value, function,
-                    &mut then_blk, locals, fn_types);
-                then_blk.finish(&mut function.raw, expr);
+                let (expr, then_blk) = Self::translate_block(*then_value,
+                    function, then_blk, locals, fn_types);
+                if let Some(then_blk) = then_blk {
+                    then_blk.finish(&mut function.raw, expr);
+                }
 
-                let expr = Self::translate_block(*else_value, function,
-                    &mut else_blk, locals, fn_types);
-                else_blk.finish(&mut function.raw, expr);
-                res
+                let (expr, else_blk) = Self::translate_block(*else_value, function,
+                    else_blk, locals, fn_types);
+                if let Some(else_blk) = else_blk {
+                    else_blk.finish(&mut function.raw, expr);
+                }
+                (res, Some(join))
             }
-            e => panic!("unimplemented: {:?}", e),
+            ExprKind::Return(ret) => {
+                let (value, block) = ret.translate(function, block, locals,
+                    fn_types);
+                if let Some(block) = block {
+                    block.early_ret(&mut function.raw, value);
+                }
+                (mir::Value::const_unit(), None)
+            }
+            ExprKind::Assign {
+                dst,
+                src,
+            } => {
+                let var = if let Some(var) = locals.get(&dst) {
+                    *var
+                } else if let Some(&(num, _)) = function.args.get(&dst) {
+                    function.raw.get_param(num as u32)
+                } else {
+                    panic!("ICE: unknown variable: {}", dst)
+                };
+                let (value, mut blk) =
+                    src.translate(function, block, locals, fn_types);
+                if let Some(ref mut blk) = blk {
+                    blk.write_to_var(var, value, &mut function.raw)
+                }
+                (mir::Value::const_unit(), blk)
+            }
+            ExprKind::Block(body) => {
+                Self::translate_block(*body, function, block, locals,
+                    fn_types)
+            }
         }
     }
 
     pub fn translate_block(body: Block, function: &mut Function,
-            block: &mut mir::Block,
+            block: mir::Block,
             locals: &mut HashMap<String, mir::Variable>,
-            fn_types: &HashMap<String, ty::Function>) -> mir::Value {
+            fn_types: &HashMap<String, ty::Function>)
+            -> (mir::Value, Option<mir::Block>) {
+        let mut block = Some(block);
         for stmt in body.stmts {
-            match stmt {
-                Stmt::Let {
-                    name,
-                    ty,
-                    value,
-                } => {
-                    let var = function.raw.new_local(ty);
-                    locals.insert(name, var);
-                    if let Some(value) = value {
-                        let value =
-                            value.translate(function, block, locals, fn_types);
-                        block.write_to_var(var, value, &mut function.raw)
+            if let Some(blk) = block.take() {
+                match stmt {
+                    Stmt::Let {
+                        name,
+                        ty,
+                        value,
+                    } => {
+                        let var = function.raw.new_local(ty);
+                        locals.insert(name, var);
+                        if let Some(value) = value {
+                            let (value, blk) =
+                                value.translate(function, blk,
+                                    locals, fn_types);
+                            if let Some(mut blk) = blk {
+                                blk.write_to_var(var, value,
+                                    &mut function.raw);
+                                block = Some(blk);
+                            }
+                        } else {
+                            block = Some(blk);
+                        }
+                    }
+                    Stmt::Expr(e) => {
+                        let (value, blk) = e.translate(function, blk,
+                            locals, fn_types);
+                        if let Some(mut blk) = blk {
+                            blk.write_to_tmp(value,
+                                &mut function.raw, fn_types);
+                            block = Some(blk);
+                        }
                     }
                 }
-                Stmt::Expr(e) => {
-                    let value = e.translate(function, block, locals, fn_types);
-                    block.write_to_tmp(value, &mut function.raw, fn_types);
-                }
+            } else {
+                break;
             }
         }
         if let Some(e) = body.expr {
-            e.translate(function, block, locals, fn_types)
+            if let Some(blk) = block {
+                e.translate(function, blk, locals, fn_types)
+            } else {
+                (mir::Value::const_unit(), None)
+            }
         } else {
-            mir::Value::const_unit()
+            (mir::Value::const_unit(), block)
         }
     }
 }

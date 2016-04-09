@@ -39,7 +39,7 @@ impl Function {
             for ty in &input_types {
                 ret.new_local(*ty);
             }
-            let blk = ret.get_block(&START_BLOCK);
+            let blk = ret.get_block(&mut START_BLOCK);
             for i in 0..input_types.len() as u32 {
                 blk.statements.push(Statement(Lvalue::Variable(Variable(i)),
                     Value::leaf(ValueLeaf::Parameter(Parameter(i)))))
@@ -65,8 +65,12 @@ impl Function {
         self.locals.push(ty);
         Variable(self.locals.len() as u32 - 1)
     }
+    pub fn get_param(&mut self, n: u32) -> Variable {
+        assert!(n < self.ty.input().len() as u32);
+        Variable(n)
+    }
 
-    fn get_block(&mut self, blk: &Block) -> &mut BlockData {
+    fn get_block(&mut self, blk: &mut Block) -> &mut BlockData {
         &mut self.blocks[blk.0 as usize]
     }
     fn get_tmp_ty(&self, tmp: &Temporary) -> Ty {
@@ -79,15 +83,14 @@ impl Function {
         self.locals[var.0 as usize]
     }
 
-    fn get_leaf(&mut self, value: Value, block: &Block,
+    fn get_leaf(&mut self, value: Value, block: &mut Block,
             fn_types: &HashMap<String, ty::Function>) -> ValueLeaf {
         if let ValueKind::Leaf(leaf) = value.0 {
             leaf
         } else {
             let ty = value.ty(self, fn_types);
             let tmp = self.new_tmp(ty);
-            let blk = self.get_block(block);
-            blk.statements.push(Statement(Lvalue::Temporary(tmp), value));
+            block.add_stmt(Lvalue::Temporary(tmp), value, self);
             ValueLeaf::Temporary(tmp)
         }
     }
@@ -313,114 +316,130 @@ impl Value {
     }
 
     // -- unops --
-    pub fn pos(inner: Value, function: &mut Function, block: &Block,
+    pub fn pos(inner: Value, function: &mut Function, block: &mut Block,
             fn_types: &HashMap<String, ty::Function>) -> Value {
         Value(ValueKind::Pos(function.get_leaf(inner, block, fn_types)))
     }
-    pub fn neg(inner: Value, function: &mut Function, block: &Block,
+    pub fn neg(inner: Value, function: &mut Function, block: &mut Block,
             fn_types: &HashMap<String, ty::Function>) -> Value {
         Value(ValueKind::Neg(function.get_leaf(inner, block, fn_types)))
     }
-    pub fn not(inner: Value, function: &mut Function, block: &Block,
+    pub fn not(inner: Value, function: &mut Function, block: &mut Block,
             fn_types: &HashMap<String, ty::Function>) -> Value {
         Value(ValueKind::Not(function.get_leaf(inner, block, fn_types)))
     }
 
     // -- binops --
-    pub fn add(lhs: Value, rhs: Value, function: &mut Function, block: &Block,
-            fn_types: &HashMap<String, ty::Function>) -> Value {
+    pub fn add(lhs: Value, rhs: Value, function: &mut Function,
+            block: &mut Block, fn_types: &HashMap<String, ty::Function>)
+            -> Value {
         Value(ValueKind::Add(
             function.get_leaf(lhs, block, fn_types),
             function.get_leaf(rhs, block, fn_types)))
     }
-    pub fn sub(lhs: Value, rhs: Value, function: &mut Function, block: &Block,
-            fn_types: &HashMap<String, ty::Function>) -> Value {
+    pub fn sub(lhs: Value, rhs: Value, function: &mut Function,
+            block: &mut Block, fn_types: &HashMap<String, ty::Function>)
+            -> Value {
         Value(ValueKind::Sub(
             function.get_leaf(lhs, block, fn_types),
             function.get_leaf(rhs, block, fn_types)))
     }
-    pub fn mul(lhs: Value, rhs: Value, function: &mut Function, block: &Block,
-            fn_types: &HashMap<String, ty::Function>) -> Value {
+    pub fn mul(lhs: Value, rhs: Value, function: &mut Function,
+            block: &mut Block, fn_types: &HashMap<String, ty::Function>)
+            -> Value {
         Value(ValueKind::Mul(
             function.get_leaf(lhs, block, fn_types),
             function.get_leaf(rhs, block, fn_types)))
     }
-    pub fn div(lhs: Value, rhs: Value, function: &mut Function, block: &Block,
-            fn_types: &HashMap<String, ty::Function>) -> Value {
+    pub fn div(lhs: Value, rhs: Value, function: &mut Function,
+            block: &mut Block, fn_types: &HashMap<String, ty::Function>)
+            -> Value {
         Value(ValueKind::Div(
             function.get_leaf(lhs, block, fn_types),
             function.get_leaf(rhs, block, fn_types)))
     }
-    pub fn rem(lhs: Value, rhs: Value, function: &mut Function, block: &Block,
-            fn_types: &HashMap<String, ty::Function>) -> Value {
+    pub fn rem(lhs: Value, rhs: Value, function: &mut Function,
+            block: &mut Block, fn_types: &HashMap<String, ty::Function>)
+            -> Value {
         Value(ValueKind::Rem(
             function.get_leaf(lhs, block, fn_types),
             function.get_leaf(rhs, block, fn_types)))
     }
-    pub fn and(lhs: Value, rhs: Value, function: &mut Function, block: &Block,
-            fn_types: &HashMap<String, ty::Function>) -> Value {
+    pub fn and(lhs: Value, rhs: Value, function: &mut Function,
+            block: &mut Block, fn_types: &HashMap<String, ty::Function>)
+            -> Value {
         Value(ValueKind::And(
             function.get_leaf(lhs, block, fn_types),
             function.get_leaf(rhs, block, fn_types)))
     }
-    pub fn xor(lhs: Value, rhs: Value, function: &mut Function, block: &Block,
-            fn_types: &HashMap<String, ty::Function>) -> Value {
+    pub fn xor(lhs: Value, rhs: Value, function: &mut Function,
+            block: &mut Block, fn_types: &HashMap<String, ty::Function>)
+            -> Value {
         Value(ValueKind::Xor(
             function.get_leaf(lhs, block, fn_types),
             function.get_leaf(rhs, block, fn_types)))
     }
-    pub fn or(lhs: Value, rhs: Value, function: &mut Function, block: &Block,
-            fn_types: &HashMap<String, ty::Function>) -> Value {
+    pub fn or(lhs: Value, rhs: Value, function: &mut Function,
+            block: &mut Block, fn_types: &HashMap<String, ty::Function>)
+            -> Value {
         Value(ValueKind::Or(
             function.get_leaf(lhs, block, fn_types),
             function.get_leaf(rhs, block, fn_types)))
     }
-    pub fn shl(lhs: Value, rhs: Value, function: &mut Function, block: &Block,
-            fn_types: &HashMap<String, ty::Function>) -> Value {
+    pub fn shl(lhs: Value, rhs: Value, function: &mut Function,
+            block: &mut Block, fn_types: &HashMap<String, ty::Function>)
+            -> Value {
         Value(ValueKind::Shl(
             function.get_leaf(lhs, block, fn_types),
             function.get_leaf(rhs, block, fn_types)))
     }
-    pub fn shr(lhs: Value, rhs: Value, function: &mut Function, block: &Block,
-            fn_types: &HashMap<String, ty::Function>) -> Value {
+    pub fn shr(lhs: Value, rhs: Value, function: &mut Function,
+            block: &mut Block, fn_types: &HashMap<String, ty::Function>)
+            -> Value {
         Value(ValueKind::Shr(
             function.get_leaf(lhs, block, fn_types),
             function.get_leaf(rhs, block, fn_types)))
     }
 
     // -- comparisons --
-    pub fn eq(lhs: Value, rhs: Value, function: &mut Function, block: &Block,
-            fn_types: &HashMap<String, ty::Function>) -> Value {
+    pub fn eq(lhs: Value, rhs: Value, function: &mut Function,
+            block: &mut Block, fn_types: &HashMap<String, ty::Function>)
+            -> Value {
         Value(ValueKind::Eq(
             function.get_leaf(lhs, block, fn_types),
             function.get_leaf(rhs, block, fn_types)))
     }
-    pub fn neq(lhs: Value, rhs: Value, function: &mut Function, block: &Block,
-            fn_types: &HashMap<String, ty::Function>) -> Value {
+    pub fn neq(lhs: Value, rhs: Value, function: &mut Function,
+            block: &mut Block, fn_types: &HashMap<String, ty::Function>)
+            -> Value {
         Value(ValueKind::Neq(
             function.get_leaf(lhs, block, fn_types),
             function.get_leaf(rhs, block, fn_types)))
     }
-    pub fn lt(lhs: Value, rhs: Value, function: &mut Function, block: &Block,
-            fn_types: &HashMap<String, ty::Function>) -> Value {
+    pub fn lt(lhs: Value, rhs: Value, function: &mut Function,
+            block: &mut Block, fn_types: &HashMap<String, ty::Function>)
+            -> Value {
         Value(ValueKind::Lt(
             function.get_leaf(lhs, block, fn_types),
             function.get_leaf(rhs, block, fn_types)))
     }
-    pub fn lte(lhs: Value, rhs: Value, function: &mut Function, block: &Block,
-            fn_types: &HashMap<String, ty::Function>) -> Value {
+    pub fn lte(lhs: Value, rhs: Value, function: &mut Function,
+            block: &mut Block, fn_types: &HashMap<String, ty::Function>)
+            -> Value {
         Value(ValueKind::Lte(
             function.get_leaf(lhs, block, fn_types),
             function.get_leaf(rhs, block, fn_types)))
     }
-    pub fn gt(lhs: Value, rhs: Value, function: &mut Function, block: &Block,
-            fn_types: &HashMap<String, ty::Function>) -> Value {
+    pub fn gt(lhs: Value, rhs: Value, function: &mut Function,
+            block: &mut Block, fn_types: &HashMap<String, ty::Function>)
+            -> Value {
         Value(ValueKind::Gt(
             function.get_leaf(lhs, block, fn_types),
             function.get_leaf(rhs, block, fn_types)))
     }
-    pub fn gte(lhs: Value, rhs: Value, function: &mut Function, block: &Block,
-            fn_types: &HashMap<String, ty::Function>) -> Value {
+    pub fn gte(lhs: Value, rhs: Value, function: &mut Function,
+            block: &mut Block, fn_types: &HashMap<String, ty::Function>)
+            -> Value {
         Value(ValueKind::Gte(
             function.get_leaf(lhs, block, fn_types),
             function.get_leaf(rhs, block, fn_types)))
@@ -428,7 +447,8 @@ impl Value {
 
     // -- misc --
     pub fn call(callee: String, args: Vec<Value>, function: &mut Function,
-            block: &Block, fn_types: &HashMap<String, ty::Function>) -> Value {
+            block: &mut Block, fn_types: &HashMap<String, ty::Function>)
+            -> Value {
         let args =
             args.into_iter().map(|v|
                 function.get_leaf(v, block, fn_types)).collect();
@@ -752,18 +772,18 @@ enum Terminator {
 impl Terminator {
     unsafe fn to_llvm(self, function: &LlFunction) {
         match self {
-            Terminator::Goto(b) => {
-                LLVMBuildBr(function.builder, function.get_block(&b));
+            Terminator::Goto(mut b) => {
+                LLVMBuildBr(function.builder, function.get_block(&mut b));
             },
             Terminator::If {
                 cond,
-                then_blk,
-                else_blk,
+                mut then_blk,
+                mut else_blk,
             } => {
                 let cond = cond.to_llvm(function);
                 LLVMBuildCondBr(function.builder, cond,
-                    function.get_block(&then_blk),
-                    function.get_block(&else_blk));
+                    function.get_block(&mut then_blk),
+                    function.get_block(&mut else_blk));
             }
             Terminator::Return => {
                 match function.mir.ty.output() {
@@ -785,20 +805,40 @@ impl Terminator {
 pub struct Block(usize);
 
 impl Block {
-    pub fn if_else(&mut self, ty: Ty, cond: Value, function: &mut Function,
+    pub fn write_to_var(&mut self, var: Variable, val: Value,
+            function: &mut Function) {
+        self.add_stmt(Lvalue::Variable(var), val, function)
+    }
+
+    pub fn write_to_tmp(&mut self, val: Value, function: &mut Function,
+            fn_types: &HashMap<String, ty::Function>) {
+        let ty = val.ty(function, fn_types);
+        let tmp = function.new_tmp(ty);
+        self.add_stmt(Lvalue::Temporary(tmp), val, function)
+    }
+
+    fn add_stmt(&mut self, lvalue: Lvalue, value: Value,
+            function: &mut Function) {
+        let blk = function.get_block(self);
+        blk.statements.push(Statement(lvalue, value))
+    }
+}
+// terminators
+impl Block {
+    pub fn if_else(mut self, ty: Ty, cond: Value, function: &mut Function,
             fn_types: &HashMap<String, ty::Function>)
-            -> (Block, Block, Value) {
-        let cond = function.get_leaf(cond, self, fn_types);
+            -> (Block, Block, Block, Value) {
+        let cond = function.get_leaf(cond, &mut self, fn_types);
         let tmp = function.new_tmp(ty);
 
-        let then = function.new_block(Lvalue::Temporary(tmp),
+        let mut then = function.new_block(Lvalue::Temporary(tmp),
             Terminator::Goto(Block(0)));
-        let else_ = function.new_block(Lvalue::Temporary(tmp),
+        let mut else_ = function.new_block(Lvalue::Temporary(tmp),
             Terminator::Goto(Block(0)));
         // terminator is not permanent
 
         let (expr, term) = {
-            let blk = function.get_block(self);
+            let blk = function.get_block(&mut self);
             let term = std::mem::replace(&mut blk.terminator,
                 Terminator::If {
                     cond: cond,
@@ -810,48 +850,29 @@ impl Block {
         let join = function.new_block(expr, term);
 
         {
-            let then_blk = function.get_block(&then);
+            let then_blk = function.get_block(&mut then);
             then_blk.terminator = Terminator::Goto(Block(join.0));
         }
         {
-            let else_blk = function.get_block(&else_);
+            let else_blk = function.get_block(&mut else_);
             else_blk.terminator = Terminator::Goto(Block(join.0));
         }
 
-        std::mem::replace(self, join);
-        (then, else_, Value(ValueKind::Leaf(ValueLeaf::Temporary(tmp))))
+        (then, else_, join, Value(ValueKind::Leaf(ValueLeaf::Temporary(tmp))))
     }
 
-    pub fn write_to_var(&mut self, var: Variable, val: Value,
-            function: &mut Function) {
-        let blk = function.get_block(self);
-        blk.statements.push(Statement(Lvalue::Variable(var), val));
-    }
-
-    pub fn write_to_tmp(&mut self, val: Value, function: &mut Function,
-            fn_types: &HashMap<String, ty::Function>) {
-        let ty = val.ty(function, fn_types);
-        let tmp = function.new_tmp(ty);
-        let blk = function.get_block(self);
-        blk.statements.push(Statement(Lvalue::Temporary(tmp), val));
-    }
-}
-// terminators
-impl Block {
-    /*
-    pub fn early_ret(self, function: &mut Function, value: Value) {
-        let blk = function.get_block(&self);
+    pub fn early_ret(mut self, function: &mut Function, value: Value) {
+        let blk = function.get_block(&mut self);
         blk.statements.push(Statement(Lvalue::Return, value));
         blk.terminator = Terminator::Goto(END_BLOCK);
     }
-    */
 
-    pub fn finish(self, function: &mut Function, value: Value) {
-        let blk = function.get_block(&self);
+    pub fn finish(mut self, function: &mut Function, value: Value) {
+        let blk = function.get_block(&mut self);
         blk.statements.push(Statement(blk.expr, value));
     }
 
-    fn terminate(&self, function: &mut Function, terminator: Terminator) {
+    fn terminate(&mut self, function: &mut Function, terminator: Terminator) {
         let blk = function.get_block(self);
         blk.terminator = terminator;
     }

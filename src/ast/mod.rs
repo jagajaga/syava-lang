@@ -81,7 +81,7 @@ pub enum AstError {
     UndefinedVariableName {
         name: String,
         function: String,
-        //compiler: (&'static str, u32),
+        compiler: (&'static str, u32),
     },
     FunctionDoesntExist(String),
     UnopUnsupported {
@@ -166,13 +166,13 @@ impl Function {
     }
 
     fn add_body(mut self, body: Block, ast: &Ast) -> mir::Function {
-        let mut block = self.raw.start_block();
-        // let mut locals = HashMap::new();
-
+        let block = self.raw.start_block();
         let mut locals = HashMap::new();
-        let ret = Expr::translate_block(body, &mut self, &mut block,
+        let (ret, blk) = Expr::translate_block(body, &mut self, block,
                 &mut locals, &ast.function_types);
-        block.finish(&mut self.raw, ret);
+        if let Some(blk) = blk {
+            blk.finish(&mut self.raw, ret);
+        }
         self.raw
     }
 }
