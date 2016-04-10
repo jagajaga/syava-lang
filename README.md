@@ -9,7 +9,7 @@ Sayava language.
 **А**ктуальности
 
 ### About
-`Syava-lang` is a compiler project. The result of compilation is llvm's IR.
+`Syava-lang` is a compiler project. The result of compilation is LLVM's IR.
 
 Current features:
 - [x] let
@@ -41,3 +41,7 @@ If you want manual testing run
 ```
 cargo run <path_to_testing_source>
 ```
+
+### Examples
+
+See `test.sva` and `src/tests.rs`
