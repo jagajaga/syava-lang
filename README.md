@@ -8,6 +8,21 @@ Sayava language.
 
 **А**ктуальности
 
+### About
+`Syava-lang` is a compiler project. The result of compilation is llvm's IR.
+
+Current features:
+- [x] let
+- [x] if
+- [x] Numbers
+- [x] Void
+Etc
+
+Future plans:
+- [ ] Pointers
+- [ ] &
+- [ ] Return last statement
+
 ### Building
 You will need `rust-nightly` and `cargo`.
 After you obtain them for your distro, simply run
