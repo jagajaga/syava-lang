@@ -34,6 +34,7 @@ pub enum ExprKind<'t> {
     Pos(Box<Expr<'t>>), // unary plus
     Neg(Box<Expr<'t>>), // unary minus
     Not(Box<Expr<'t>>), // !expr
+    Ref(Box<Expr<'t>>), // &expr
     Variable(String),
     IntLiteral(u64),
     BoolLiteral(bool),
@@ -139,6 +140,13 @@ impl<'t> Expr<'t> {
         }
     }
 
+    pub fn ref_(inner: Expr<'t>, ctxt: &'t TypeContext<'t>) -> Self {
+        Expr {
+            kind: ExprKind::Ref(Box::new(inner)),
+            ty: Type::ref_(Type::infer(ctxt)),
+        }
+    }
+
     pub fn ret(ret: Expr<'t>, ctxt: &'t TypeContext<'t>) -> Self {
         Expr {
             kind: ExprKind::Return(Box::new(ret)),
@@ -164,10 +172,10 @@ impl<'t> Expr<'t> {
         match self.kind {
             ExprKind::If {..} | ExprKind::Block(_) => true,
             ExprKind::Call {..} | ExprKind::Binop {..} | ExprKind::Pos(_)
-            | ExprKind::Neg(_) | ExprKind::Not(_) | ExprKind::Variable(_)
-            | ExprKind::IntLiteral(_) | ExprKind::BoolLiteral(_)
-            | ExprKind::UnitLiteral | ExprKind::Return(_)
-            | ExprKind::Assign {..} => false,
+            | ExprKind::Neg(_) | ExprKind::Not(_) | ExprKind::Ref(_)
+            | ExprKind::Variable(_) | ExprKind::IntLiteral(_)
+            | ExprKind::BoolLiteral(_) | ExprKind::UnitLiteral
+            | ExprKind::Return(_) | ExprKind::Assign {..} => false,
         }
     }
 }
@@ -284,11 +292,8 @@ impl<'t> Expr<'t> {
             }
             ExprKind::Pos(ref mut inner) | ExprKind::Neg(ref mut inner)
             | ExprKind::Not(ref mut inner) => {
-                match inner.unify_type(ctxt, to_unify,
-                        uf, variables, function, functions) {
-                    Ok(_) => {},
-                    Err(_) => {},
-                }
+                try!(inner.unify_type(ctxt, to_unify,
+                        uf, variables, function, functions));
                 let self_ty = self.ty;
                 let inner_ty = inner.ty;
                 uf.unify(self.ty, inner.ty).map_err(|()|
@@ -299,6 +304,22 @@ impl<'t> Expr<'t> {
                         compiler: fl!(),
                     }
                 )
+            }
+            ExprKind::Ref(ref mut inner) => {
+                if let TypeVariant::Reference(to_unify) = *to_unify.variant {
+                    try!(inner.unify_type(ctxt, to_unify,
+                        uf, variables, function, functions));
+                } else {
+                    return Err(AstError::CouldNotUnify {
+                        first: to_unify,
+                        second: inner.ty,
+                        function: function.name.clone(),
+                        compiler: fl!(),
+                    });
+                }
+
+                Ok(uf.unify(self.ty, Type::ref_(inner.ty))
+                    .expect("These should never be different"))
             }
             ExprKind::Binop {
                 op,
@@ -603,6 +624,19 @@ impl<'t> Expr<'t> {
                     }
                 }
             }
+            ExprKind::Ref(ref mut inner) => {
+                self.ty = match uf.actual_ty(self.ty) {
+                    Some(t) => t,
+                    None => return Err(AstError::NoActualType {
+                        compiler: fl!(),
+                        function: function.name.clone(),
+                    })
+                };
+                try!(inner.finalize_type(uf, function));
+                assert!(self.ty == Type::ref_(inner.ty),
+                    "self: {}, inner: &{}", self.ty, inner.ty);
+                Ok(())
+            }
             ExprKind::Binop {
                 ref mut lhs,
                 ref mut rhs,
@@ -738,6 +772,17 @@ impl<'t> Expr<'t> {
                 if let Some(mut blk) = blk {
                     (mir::Value::not(inner, &mut function.raw, &mut blk,
                         fn_types, ctxt), Some(blk))
+                } else {
+                    (mir::Value::const_unit(), None)
+                }
+            }
+            ExprKind::Ref(e) => {
+                let (inner, blk) =
+                    e.translate(function, block, locals, fn_types, ctxt);
+                if let Some(mut blk) = blk {
+                    (mir::Value::ref_(inner, &mut function.raw, &mut blk,
+                        fn_types, ctxt),
+                    Some(blk))
                 } else {
                     (mir::Value::const_unit(), None)
                 }

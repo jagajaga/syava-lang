@@ -32,6 +32,7 @@ fn main() {
     let mut name = "".to_owned();
     let mut print_mir = false;
     let mut print_llir = false;
+    let mut opt = false;
     {
         use argparse::{ArgumentParser, Store, StoreTrue};
 
@@ -44,6 +45,8 @@ fn main() {
             "Pass if you would like to print the generated MIR");
         ap.refer(&mut print_llir).add_option(&["--print-llir"], StoreTrue,
             "Pass if you would like to print the generated LLVM IR");
+        ap.refer(&mut opt).add_option(&["--opt", "-O"], StoreTrue,
+            "Pass if you would like to optimize the generated LLVM IR");
 
         ap.parse_args_or_exit();
     }
@@ -67,7 +70,7 @@ fn main() {
         println!("{}", mir);
     }
 
-    mir.build(print_llir)
+    mir.build(print_llir, opt)
 }
 
 mod tests;

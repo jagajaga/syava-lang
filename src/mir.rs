@@ -182,6 +182,7 @@ impl<'t> LlFunction<'t> {
                 cstr!(""))
         }
     }
+
     fn get_block(&self, blk: &Block) -> LLVMBasicBlockRef {
         self.blocks[blk.0]
     }
@@ -254,6 +255,8 @@ enum ValueKind<'t> {
     Pos(ValueLeaf<'t>),
     Neg(ValueLeaf<'t>),
     Not(ValueLeaf<'t>),
+
+    Ref(ValueLeaf<'t>),
 
     // -- binops --
     Add(ValueLeaf<'t>, ValueLeaf<'t>),
@@ -336,6 +339,15 @@ impl<'t> Value<'t> {
             fn_types: &HashMap<String, ty::Function<'t>>,
             ctxt: &'t TypeContext<'t>) -> Self {
         Value(ValueKind::Not(function.get_leaf(inner, block, fn_types, ctxt)))
+    }
+    pub fn ref_(inner: Self, function: &mut Function<'t>, block: &mut Block,
+            fn_types: &HashMap<String, ty::Function<'t>>,
+            ctxt: &'t TypeContext<'t>) -> Self {
+        let inner_ty = inner.ty(function, fn_types, ctxt);
+        let ptr = function.new_tmp(Type::ref_(inner_ty));
+        block.write_ref(Lvalue::Temporary(ptr), inner, function, fn_types,
+            ctxt);
+        Value::leaf(ValueLeaf::Temporary(ptr))
     }
 
     // -- binops --
@@ -479,6 +491,8 @@ impl<'t> Value<'t> {
             ValueKind::Pos(ref inner) | ValueKind::Neg(ref inner)
             | ValueKind::Not(ref inner) => inner.ty(function, ctxt),
 
+            ValueKind::Ref(ref inner) => Type::ref_(inner.ty(function, ctxt)),
+
             ValueKind::Add(ref lhs, ref rhs)
             | ValueKind::Sub(ref lhs, ref rhs)
             | ValueKind::Mul(ref lhs, ref rhs)
@@ -547,6 +561,15 @@ impl<'t> Value<'t> {
                     | TypeVariant::Bool =>
                         LLVMBuildNot(function.builder, llinner, cstr!("")),
                     _ => panic!("ICE: {} can't be used in unary !", ty),
+                }
+            }
+            ValueKind::Ref(inner) => {
+                match inner {
+                    ValueLeaf::Variable(v) => function.get_local_ptr(&v),
+                    ValueLeaf::Temporary(t) => function.get_tmp_ptr(&t),
+                    ValueLeaf::Parameter(_) =>
+                        panic!("Attempted to take reference of parameter"),
+                    _ => panic!("Attempted to take reference of const"),
                 }
             }
             ValueKind::Add(lhs, rhs) => {
@@ -839,6 +862,14 @@ impl Block {
         self.add_stmt(Lvalue::Temporary(tmp), val, function)
     }
 
+    fn write_ref<'t>(&mut self, ptr: Lvalue, val: Value<'t>,
+            function: &mut Function<'t>,
+            fn_types: &HashMap<String, ty::Function<'t>>,
+            ctxt: &'t TypeContext<'t>) {
+        let leaf = function.get_leaf(val, self, fn_types, ctxt);
+        self.add_stmt(ptr, Value(ValueKind::Ref(leaf)), function);
+    }
+
     fn add_stmt<'t>(&mut self, lvalue: Lvalue, value: Value<'t>,
             function: &mut Function<'t>) {
         let blk = function.get_block(self);
@@ -939,7 +970,7 @@ impl<'t> Mir<'t> {
         self.functions.insert(name, func);
     }
 
-    pub fn build(self, print_llir: bool) {
+    pub fn build(self, print_llir: bool, opt: bool) {
         use llvm_sys::transforms::scalar::*;
         use llvm_sys::analysis::*;
         use llvm_sys::analysis::LLVMVerifierFailureAction::*;
@@ -974,7 +1005,9 @@ impl<'t> Mir<'t> {
                 let llfunc = *llvm_functions.get(&name).unwrap();
                 function.build(llfunc, &llvm_functions, &self.ctxt);
                 LLVMVerifyFunction(llfunc, LLVMAbortProcessAction);
-                LLVMRunFunctionPassManager(optimizer, llfunc);
+                if opt {
+                    LLVMRunFunctionPassManager(optimizer, llfunc);
+                }
             }
 
             if let Some(f) = llvm_functions.get("main") {
@@ -1116,6 +1149,7 @@ impl<'t> std::fmt::Display for Value<'t> {
             ValueKind::Pos(ref inner) => write!(f, "Pos({})", inner),
             ValueKind::Neg(ref inner) => write!(f, "Neg({})", inner),
             ValueKind::Not(ref inner) => write!(f, "Not({})", inner),
+            ValueKind::Ref(ref inner) => write!(f, "&{}", inner),
             ValueKind::Add(ref lhs, ref rhs)
                 => write!(f, "Add({}, {})", lhs, rhs),
             ValueKind::Sub(ref lhs, ref rhs)

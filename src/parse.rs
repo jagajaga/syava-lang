@@ -670,6 +670,14 @@ impl<'src> Parser<'src> {
                 try!(self.eat(Token::CloseParen, line!()));
                 Ok(Type::unit(ctxt))
             }
+            Token::Operand(Operand::And) => {
+                let inner = try!(self.parse_ty(ctxt, line));
+                Ok(Type::ref_(inner))
+            }
+            Token::Operand(Operand::AndAnd) => {
+                let inner = try!(self.parse_ty(ctxt, line));
+                Ok(Type::ref_(Type::ref_(inner)))
+            }
             tok => Err(ParserError::UnexpectedToken {
                 found: tok,
                 expected: TokenType::AnyOf(vec![Token::Ident(String::new()),
@@ -769,6 +777,14 @@ impl<'src> Parser<'src> {
             Token::Operand(Operand::Not) => {
                 let inner = try!(self.parse_single_expr(ctxt, line!()));
                 Ok(Some(Expr::not(inner, ctxt)))
+            }
+            Token::Operand(Operand::And) => {
+                let inner = try!(self.parse_single_expr(ctxt, line!()));
+                Ok(Some(Expr::ref_(inner, ctxt)))
+            }
+            Token::Operand(Operand::AndAnd) => {
+                let inner = try!(self.parse_single_expr(ctxt, line!()));
+                Ok(Some(Expr::ref_(Expr::ref_(inner, ctxt), ctxt)))
             }
             Token::KeywordTrue => Ok(Some(Expr::bool_lit(true, ctxt))),
             Token::KeywordFalse => Ok(Some(Expr::bool_lit(false, ctxt))),
