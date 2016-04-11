@@ -10,6 +10,7 @@ name = "syavac"
 llvm-sys = "0.2.1"
 argparse = "0.2.1"
 libc = "0.2.7"
+typed-arena = "1.1.0"
 
 [features]
 

@@ -1,6 +1,7 @@
 extern crate libc;
 extern crate llvm_sys;
 extern crate argparse;
+extern crate typed_arena;
 
 macro_rules! cstr {
     ($s:expr) => (
@@ -52,8 +53,9 @@ fn main() {
         .read_to_end(&mut file).unwrap();
     let file = String::from_utf8(file).unwrap();
     let lexer = Lexer::new(&file);
+    let tyctxt = ty::TypeContext::new();
 
-    let ast = match Ast::create(lexer) {
+    let ast = match Ast::create(lexer, &tyctxt) {
         Ok(ast) => ast,
         Err(e) => panic!("\n{:#?}", e),
     };

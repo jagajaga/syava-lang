@@ -1,45 +1,9 @@
 // returns 89
 fn main() -> u32 {
-    if fib(10 + 5) == fib2(15) {
-        fib3(10)
-    } else {
-        !0
-    }
+    let x = 0;
+    deref(x)
 }
 
-//returns the nth fibonacci number
-fn fib(n: u32) -> u32 {
-    if fib_base(n) {
-        return 1;
-    } else {
-        let y = fib(n - 1);
-        let z = fib(n - 2);
-        y + z
-    }
-}
-
-fn fib2(n: u32) -> u32 {
-    if fib_base(n) {
-        return 1;
-    }
-
-    {
-        let y = fib(n - 1);
-        let z = fib(n - 2);
-        y + z
-    }
-}
-
-fn fib3(n: u32) -> u32 {
-    let x;
-    if fib_base(n) {
-        x = 1;
-    } else {
-        x = fib(n - 1) + fib(n - 2);
-    }
+fn deref(x: u32) -> u32 {
     x
-}
-
-fn fib_base(n: u32) -> bool {
-    n == 0 || n == 1
 }

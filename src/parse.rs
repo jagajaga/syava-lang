@@ -1,7 +1,7 @@
 use std::str;
 use ast;
 use ast::expr::{Stmt, Expr, ExprKind};
-use ty;
+use ty::{self, Type, TypeContext};
 use Either::{self, Left, Right};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -110,7 +110,8 @@ impl Operand {
     }
 
     // simply a convenience function
-    pub fn expr(&self, lhs: Expr, rhs: Expr) -> Expr {
+    pub fn expr<'t>(&self, lhs: Expr<'t>, rhs: Expr<'t>,
+            ctxt: &'t TypeContext<'t>) -> Expr<'t> {
         self.precedence(); // makes certain that self is a binop
         Expr {
             kind: ExprKind::Binop {
@@ -118,7 +119,7 @@ impl Operand {
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
             },
-            ty: ty::Ty::Infer(None),
+            ty: Type::infer(ctxt),
         }
     }
 }
@@ -534,9 +535,10 @@ impl<'src> Parser<'src> {
         self.peekahead = Some(token);
     }
 
-    pub fn item(&mut self) -> Result<ast::Item, ParserError> {
+    pub fn item<'t>(&mut self, ctxt: &'t TypeContext<'t>)
+            -> Result<ast::Item<'t>, ParserError> {
         match try!(self.get_token()) {
-            Token::KeywordFn => self.function(),
+            Token::KeywordFn => self.function(ctxt),
             Token::Eof => Err(ParserError::ExpectedEof),
             tok => Err(ParserError::UnexpectedToken {
                 found: tok,
@@ -645,12 +647,28 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn parse_ty(&mut self, line: u32) -> Result<ty::Ty, ParserError> {
+    fn parse_ty<'t>(&mut self, ctxt: &'t TypeContext<'t>, line: u32)
+            -> Result<Type<'t>, ParserError> {
         match try!(self.get_token()) {
-            Token::Ident(s) => ty::Ty::from_str(&s, line!()),
+            Token::Ident(s) => match &*s {
+                "s8" => Ok(Type::sint(ty::Int::I8, ctxt)),
+                "s16" => Ok(Type::sint(ty::Int::I16, ctxt)),
+                "s32" => Ok(Type::sint(ty::Int::I32, ctxt)),
+                "s64" => Ok(Type::sint(ty::Int::I64, ctxt)),
+                "u8" => Ok(Type::uint(ty::Int::I8, ctxt)),
+                "u16" => Ok(Type::uint(ty::Int::I16, ctxt)),
+                "u32" => Ok(Type::uint(ty::Int::I32, ctxt)),
+                "u64" => Ok(Type::uint(ty::Int::I64, ctxt)),
+                "bool" => Ok(Type::bool(ctxt)),
+                s => Err(ParserError::UnknownType {
+                    found: s.to_owned(),
+                    line: line,
+                    compiler: fl!(),
+                })
+            },
             Token::OpenParen => {
                 try!(self.eat(Token::CloseParen, line!()));
-                Ok(ty::Ty::Unit)
+                Ok(Type::unit(ctxt))
             }
             tok => Err(ParserError::UnexpectedToken {
                 found: tok,
@@ -662,28 +680,28 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn maybe_parse_single_expr(&mut self)
-            -> Result<Option<Expr>, ParserError> {
+    fn maybe_parse_single_expr<'t>(&mut self, ctxt: &'t TypeContext<'t>)
+            -> Result<Option<Expr<'t>>, ParserError> {
         match try!(self.get_token()) {
             Token::Ident(name) => {
                 if let Some(_) = try!(self.maybe_eat(Token::OpenParen)) {
                     let mut args = Vec::new();
-                    if let Some(e) = try!(self.maybe_parse_expr()) {
+                    if let Some(e) = try!(self.maybe_parse_expr(ctxt)) {
                         args.push(e);
                         while let Some(_) =
                                 try!(self.maybe_eat(Token::Comma)) {
-                            args.push(try!(self.parse_expr(line!())));
+                            args.push(try!(self.parse_expr(ctxt, line!())));
                         }
                     }
                     try!(self.eat(Token::CloseParen, line!()));
-                    Ok(Some(Expr::call(name, args, None)))
+                    Ok(Some(Expr::call(name, args, ctxt)))
                 } else {
-                    Ok(Some(Expr::var(name, None)))
+                    Ok(Some(Expr::var(name, ctxt)))
                 }
             }
             Token::KeywordIf => {
-                let condition = try!(self.parse_expr(line!()));
-                let if_value = try!(self.parse_block());
+                let condition = try!(self.parse_expr(ctxt, line!()));
+                let if_value = try!(self.parse_block(ctxt));
                 let else_value =
                 if let Some(_) =
                         try!(self.maybe_eat(Token::KeywordElse)) {
@@ -691,70 +709,76 @@ impl<'src> Parser<'src> {
                             vec![Token::OpenBrace, Token::KeywordIf]),
                             line!())) {
                         Token::OpenBrace => {
-                            try!(self.parse_block())
+                            try!(self.parse_block(ctxt))
                         }
                         Token::KeywordIf => {
-                            try!(self.parse_block())
+                            try!(self.parse_block(ctxt))
                         }
                         tok => unreachable!("{:?}", tok),
                     }
                 } else {
-                    ast::Block::expr(Expr::unit_lit())
+                    ast::Block::expr(Expr::unit_lit(ctxt))
                 };
-                Ok(Some(Expr::if_else(condition, if_value, else_value, None)))
+                Ok(Some(Expr::if_else(condition, if_value, else_value, ctxt)))
             },
             Token::OpenBrace => {
                 self.unget_token(Token::OpenBrace);
-                Ok(Some(Expr::block(try!(self.parse_block()), None)))
+                Ok(Some(Expr::block(try!(self.parse_block(ctxt)), ctxt)))
             }
 
             Token::Integer {value, suffix} => {
                 if suffix == "" {
-                    return Ok(Some(Expr::int_lit(value, None)));
+                    return Ok(Some(Expr::int_lit(value, ctxt)));
                 }
-                match ty::Ty::from_str(&suffix, self.line()) {
-                    Ok(ty @ ty::Ty::SInt(_)) | Ok(ty @ ty::Ty::UInt(_)) => {
-                        return Ok(Some(Expr::int_lit(value, Some(ty))))
-                    }
-                    _ => {}
-                }
-                Err(ParserError::InvalidSuffix {
-                    suffix: suffix,
-                    line: self.line(),
-                    compiler: fl!(),
-                })
+                let ty = match &*suffix {
+                    "" => return Ok(Some(Expr::int_lit(value, ctxt))),
+                    "s8" => Type::sint(ty::Int::I8, ctxt),
+                    "s16" => Type::sint(ty::Int::I16, ctxt),
+                    "s32" => Type::sint(ty::Int::I32, ctxt),
+                    "s64" => Type::sint(ty::Int::I64, ctxt),
+                    "u8" => Type::uint(ty::Int::I8, ctxt),
+                    "u16" => Type::uint(ty::Int::I16, ctxt),
+                    "u32" => Type::uint(ty::Int::I32, ctxt),
+                    "u64" => Type::uint(ty::Int::I64, ctxt),
+                    _ => return Err(ParserError::InvalidSuffix {
+                        suffix: suffix.clone(),
+                        line: self.line(),
+                        compiler: fl!(),
+                    })
+                };
+                Ok(Some(Expr::int_lit_with_ty(value, ty)))
             }
             Token::OpenParen => {
                 if let Some(_) =
                         try!(self.maybe_eat(Token::CloseParen)) {
-                    Ok(Some(Expr::unit_lit()))
+                    Ok(Some(Expr::unit_lit(ctxt)))
                 } else {
-                    let expr = try!(self.parse_expr(line!()));
+                    let expr = try!(self.parse_expr(ctxt, line!()));
                     try!(self.eat(Token::CloseParen, line!()));
                     Ok(Some(expr))
                 }
             }
             Token::Operand(Operand::Minus) => {
-                let inner = try!(self.parse_single_expr(line!()));
-                Ok(Some(Expr::neg(inner, None)))
+                let inner = try!(self.parse_single_expr(ctxt, line!()));
+                Ok(Some(Expr::neg(inner, ctxt)))
             }
             Token::Operand(Operand::Plus) => {
-                let inner = try!(self.parse_single_expr(line!()));
-                Ok(Some(Expr::pos(inner, None)))
+                let inner = try!(self.parse_single_expr(ctxt, line!()));
+                Ok(Some(Expr::pos(inner, ctxt)))
             }
             Token::Operand(Operand::Not) => {
-                let inner = try!(self.parse_single_expr(line!()));
-                Ok(Some(Expr::not(inner, None)))
+                let inner = try!(self.parse_single_expr(ctxt, line!()));
+                Ok(Some(Expr::not(inner, ctxt)))
             }
-            Token::KeywordTrue => Ok(Some(Expr::bool_lit(true))),
-            Token::KeywordFalse => Ok(Some(Expr::bool_lit(false))),
+            Token::KeywordTrue => Ok(Some(Expr::bool_lit(true, ctxt))),
+            Token::KeywordFalse => Ok(Some(Expr::bool_lit(false, ctxt))),
             Token::KeywordReturn => {
                 Ok(Some(Expr::ret(
-                if let Some(e) = try!(self.maybe_parse_expr()) {
+                if let Some(e) = try!(self.maybe_parse_expr(ctxt)) {
                     e
                 } else {
-                    Expr::unit_lit()
-                })))
+                    Expr::unit_lit(ctxt)
+                }, ctxt)))
             },
             tok => {
                 self.unget_token(tok);
@@ -763,9 +787,9 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn parse_single_expr(&mut self, line: u32)
-            -> Result<Expr, ParserError> {
-        match self.maybe_parse_single_expr() {
+    fn parse_single_expr<'t>(&mut self, ctxt: &'t TypeContext<'t>,
+            line: u32) -> Result<Expr<'t>, ParserError> {
+        match self.maybe_parse_single_expr(ctxt) {
             Ok(Some(e)) => Ok(e),
             Ok(None) => Err(ParserError::UnexpectedToken {
                 found: try!(self.get_token()),
@@ -777,24 +801,27 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn maybe_parse_expr(&mut self) -> Result<Option<Expr>, ParserError> {
-        let lhs = match try!(self.maybe_parse_single_expr()) {
+    fn maybe_parse_expr<'t>(&mut self, ctxt: &'t TypeContext<'t>)
+            -> Result<Option<Expr<'t>>, ParserError> {
+        let lhs = match try!(self.maybe_parse_single_expr(ctxt)) {
             Some(l) => l,
             None => return Ok(None),
         };
         match try!(self.maybe_eat_ty(&TokenType::Operand)) {
             Some(Token::Operand(ref op)) => {
-                self.parse_binop(lhs, op).map(|e| Some(e))
+                self.parse_binop(lhs, op, ctxt).map(|e| Some(e))
             }
             Some(tok) => unreachable!("{:?}", tok),
             None => {
                 if let Expr { kind: ExprKind::Variable(name), .. } = lhs {
                     if let Some(_) = try!(self.maybe_eat(Token::Equals)) {
                         let assign =
-                            Expr::assign(name, try!(self.parse_expr(line!())));
+                            Expr::assign(name,
+                                try!(self.parse_expr(ctxt, line!())),
+                                ctxt);
                         Ok(Some(assign))
                     } else {
-                        Ok(Some(Expr::var(name, None)))
+                        Ok(Some(Expr::var(name, ctxt)))
                     }
                 } else {
                     Ok(Some(lhs))
@@ -803,11 +830,12 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn parse_expr(&mut self, line: u32) -> Result<Expr, ParserError> {
-        let lhs = try!(self.parse_single_expr(line));
+    fn parse_expr<'t>(&mut self, ctxt: &'t TypeContext<'t>, line: u32)
+            -> Result<Expr<'t>, ParserError> {
+        let lhs = try!(self.parse_single_expr(ctxt, line));
         match try!(self.maybe_eat_ty(&TokenType::Operand)) {
             Some(Token::Operand(ref op)) => {
-                self.parse_binop(lhs, op)
+                self.parse_binop(lhs, op, ctxt)
             }
             Some(tok) => unreachable!("{:?}", tok),
             None => {
@@ -816,9 +844,9 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn parse_stmt(&mut self)
-            -> Result<Option<Either<Stmt, Expr>>, ParserError> {
-        match try!(self.maybe_parse_expr()) {
+    fn parse_stmt<'t>(&mut self, ctxt: &'t TypeContext<'t>)
+            -> Result<Option<Either<Stmt<'t>, Expr<'t>>>, ParserError> {
+        match try!(self.maybe_parse_expr(ctxt)) {
             Some(e) => {
                 if let Some(_) =
                         try!(self.maybe_eat(Token::Semicolon)) {
@@ -844,13 +872,13 @@ impl<'src> Parser<'src> {
                         let name = try!(self.parse_ident(line!()));
                         let ty = if let Some(_) =
                                 try!(self.maybe_eat(Token::Colon)) {
-                            try!(self.parse_ty(line!()))
+                            try!(self.parse_ty(ctxt, line!()))
                         } else {
-                            ty::Ty::Infer(None)
+                            Type::infer(ctxt)
                         };
                         let expr = if let Some(_) =
                                 try!(self.maybe_eat(Token::Equals)) {
-                            Some(Box::new(try!(self.parse_expr(line!()))))
+                            Some(Box::new(try!(self.parse_expr(ctxt, line!()))))
                         } else {
                             None
                         };
@@ -871,34 +899,36 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn parse_binop(&mut self, lhs: Expr, left_op: &Operand)
-            -> Result<Expr, ParserError> {
-        let rhs = try!(self.parse_single_expr(line!()));
+    fn parse_binop<'t>(&mut self, lhs: Expr<'t>, left_op: &Operand,
+            ctxt: &'t TypeContext<'t>)
+            -> Result<Expr<'t>, ParserError> {
+        let rhs = try!(self.parse_single_expr(ctxt, line!()));
         match try!(self.maybe_eat_ty(&TokenType::Operand)) {
             Some(Token::Operand(ref right_op)) => {
                 if left_op.precedence() >= right_op.precedence() {
-                    let new_lhs = left_op.expr(lhs, rhs);
-                    self.parse_binop(new_lhs, right_op)
+                    let new_lhs = left_op.expr(lhs, rhs, ctxt);
+                    self.parse_binop(new_lhs, right_op, ctxt)
                 } else {
-                    let new_rhs = try!(self.parse_binop(rhs, right_op));
-                    Ok(left_op.expr(lhs, new_rhs))
+                    let new_rhs = try!(self.parse_binop(rhs, right_op, ctxt));
+                    Ok(left_op.expr(lhs, new_rhs, ctxt))
                 }
             }
             Some(tok) => unreachable!("{:?}", tok),
-            None => Ok(left_op.expr(lhs, rhs)),
+            None => Ok(left_op.expr(lhs, rhs, ctxt)),
         }
     }
 
-    fn parse_block(&mut self) -> Result<ast::Block, ParserError> {
+    fn parse_block<'t>(&mut self, ctxt: &'t TypeContext<'t>)
+            -> Result<ast::Block<'t>, ParserError> {
         try!(self.eat(Token::OpenBrace, line!()));
         let mut body = Vec::new();
         let mut expr = None;
-        while let Some(st) = try!(self.parse_stmt()) {
+        while let Some(st) = try!(self.parse_stmt(ctxt)) {
             match st {
                 Left(st) => body.push(st),
                 Right(e) => {
                     expr = Some(e);
-                    if let Some(_) = try!(self.parse_stmt()) {
+                    if let Some(_) = try!(self.parse_stmt(ctxt)) {
                         println!("{:#?}", expr.unwrap());
                         return Err(ParserError::ExpectedSemicolon {
                             line: self.line(),
@@ -914,7 +944,8 @@ impl<'src> Parser<'src> {
         Ok(ast::Block::new(body, expr))
     }
 
-    fn function(&mut self) -> Result<ast::Item, ParserError> {
+    fn function<'t>(&mut self, ctxt: &'t TypeContext<'t>)
+            -> Result<ast::Item<'t>, ParserError> {
         let name = try!(self.parse_ident(line!()));
 
         try!(self.eat(Token::OpenParen, line!()));
@@ -923,16 +954,14 @@ impl<'src> Parser<'src> {
         match try!(self.get_token()) {
             Token::Ident(arg) => {
                 try!(self.eat(Token::Colon, line!()));
-                let ty = try!(self.parse_ident(line!()));
-                args.push((arg, try!(ty::Ty::from_str(&ty, self.line()))));
+                args.push((arg, try!(self.parse_ty(ctxt, line!()))));
                 loop {
                     let comma_or_close_paren = try!(self.get_token());
                     if let Token::Comma = comma_or_close_paren {
                         let name = try!(self.parse_ident(line!()));
                         try!(self.eat(Token::Colon, line!()));
-                        let ty = try!(self.parse_ident(line!()));
                         args.push((name,
-                            try!(ty::Ty::from_str(&ty, self.line()))));
+                            try!(self.parse_ty(ctxt, line!()))));
                     } else if let Token::CloseParen = comma_or_close_paren {
                         break;
                     } else {
@@ -960,9 +989,9 @@ impl<'src> Parser<'src> {
 
         let ret_ty = match try!(self.maybe_eat(Token::SkinnyArrow)) {
             Some(_) => {
-                try!(self.parse_ty(line!()))
+                try!(self.parse_ty(ctxt, line!()))
             }
-            None => ty::Ty::Unit,
+            None => Type::unit(ctxt),
         };
 
 
@@ -970,7 +999,7 @@ impl<'src> Parser<'src> {
             name: name,
             ret: ret_ty,
             args: args,
-            body: try!(self.parse_block()),
+            body: try!(self.parse_block(ctxt)),
         })
     }
 }
