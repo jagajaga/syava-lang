@@ -132,7 +132,6 @@ pub enum TypeVariant<'t> {
 
     Diverging,
 
-    #[allow(dead_code)]
     Reference(Type<'t>),
 
     Infer(Option<u32>),
@@ -195,7 +194,7 @@ impl<'t> Type<'t> {
                         Diverging"),
                 TypeVariant::Infer(_) | TypeVariant::InferInt(_) =>
                     panic!("ICE: Attempted to get the LLVM type of an \
-                        inference variable"),
+                        inference variable: {:?}", self),
             }
         }
     }
@@ -227,11 +226,11 @@ impl<'t> Type<'t> {
         }
     }
 
-    pub fn generate_inference_id(self: &mut Type<'t>, uf: &mut UnionFind<'t>) {
+    pub fn generate_inference_id(&mut self, uf: &mut UnionFind<'t>) {
         self.variant = self.get_inference_type(uf);
     }
 
-    fn get_inference_type(self: &Type<'t>, uf: &mut UnionFind<'t>)
+    fn get_inference_type(&self, uf: &mut UnionFind<'t>)
             -> &'t TypeVariant<'t> {
         match *self.variant {
             TypeVariant::Infer(None) => {
@@ -252,6 +251,36 @@ impl<'t> Type<'t> {
             | ref t @ TypeVariant::Bool | ref t @ TypeVariant::Diverging
             | ref t @ TypeVariant::Unit | ref t @ TypeVariant::Infer(Some(_))
             | ref t @ TypeVariant::InferInt(Some(_)) => t,
+        }
+    }
+
+    pub fn finalize(&mut self, uf: &mut UnionFind<'t>) -> Result<(), ()> {
+        *self = match self.get_final_ty(uf) {
+            Some(t) => t,
+            None => return Err(())
+        };
+        Ok(())
+    }
+
+    fn get_final_ty(&self, uf: &mut UnionFind<'t>)
+            -> Option<Type<'t>> {
+        match *self.variant {
+            TypeVariant::SInt(_) | TypeVariant::UInt(_) | TypeVariant::Bool
+            | TypeVariant::Unit | TypeVariant::Diverging => {
+                Some(*self)
+            }
+            TypeVariant::Reference(inner) => {
+                match inner.get_final_ty(uf) {
+                    Some(inner) => Some(Type::ref_(inner)),
+                    None => None,
+                }
+            }
+            TypeVariant::Infer(_) | TypeVariant::InferInt(_) => {
+                match uf.actual_ty(*self) {
+                    Some(t) => t.get_final_ty(uf),
+                    None => return None,
+                }
+            }
         }
     }
 }
@@ -330,10 +359,16 @@ impl<'t> UnionFind<'t> {
         let b_actual = self.actual_ty(b);
         match (a_actual, b_actual) {
             (Some(a), Some(b)) => {
-                if a == b {
+                if a.is_final_type() && b.is_final_type() && a == b {
                     Ok(())
                 } else {
-                    Err(())
+                    match (*a.variant, *b.variant) {
+                        (TypeVariant::Reference(lhs),
+                                TypeVariant::Reference(rhs)) => {
+                            self.unify(lhs, rhs)
+                        }
+                        _ => Err(())
+                    }
                 }
             }
             (None, None) => {
@@ -394,13 +429,6 @@ impl<'t> UnionFind<'t> {
                             }
                         }
                     }
-                    TypeVariant::Reference(inner) => {
-                        if let TypeVariant::Reference(ty) = *ty.variant {
-                            self.unify(inner, ty)
-                        } else {
-                            Err(())
-                        }
-                    }
                     t => panic!("actual ty isn't working: {:?}", t)
                 }
             }
@@ -409,12 +437,6 @@ impl<'t> UnionFind<'t> {
 
     pub fn actual_ty(&self, ty: Type<'t>) -> Option<Type<'t>> {
         match *ty.variant {
-            TypeVariant::SInt(_) | TypeVariant::UInt(_)
-            | TypeVariant::Bool | TypeVariant::Unit
-            | TypeVariant::Diverging => {
-                Some(ty)
-            }
-
             TypeVariant::Infer(Some(id)) | TypeVariant::InferInt(Some(id)) => {
                 self.parents_ty[self.find(id) as usize]
             }
@@ -422,13 +444,8 @@ impl<'t> UnionFind<'t> {
             TypeVariant::Infer(None) | TypeVariant::InferInt(None) => {
                 None
             }
-            TypeVariant::Reference(inner) => {
-                if let Some(inner) = self.actual_ty(inner) {
-                    Some(Type::ref_(inner))
-                } else {
-                    None
-                }
-            }
+
+            _ => Some(ty)
         }
     }
 

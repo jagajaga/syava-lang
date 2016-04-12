@@ -786,6 +786,10 @@ impl<'src> Parser<'src> {
                 let inner = try!(self.parse_single_expr(ctxt, line!()));
                 Ok(Some(Expr::ref_(Expr::ref_(inner, ctxt), ctxt)))
             }
+            Token::Operand(Operand::Mul) => {
+                let inner = try!(self.parse_single_expr(ctxt, line!()));
+                Ok(Some(Expr::deref(inner, ctxt)))
+            }
             Token::KeywordTrue => Ok(Some(Expr::bool_lit(true, ctxt))),
             Token::KeywordFalse => Ok(Some(Expr::bool_lit(false, ctxt))),
             Token::KeywordReturn => {

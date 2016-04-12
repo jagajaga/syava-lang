@@ -35,6 +35,7 @@ pub enum ExprKind<'t> {
     Neg(Box<Expr<'t>>), // unary minus
     Not(Box<Expr<'t>>), // !expr
     Ref(Box<Expr<'t>>), // &expr
+    Deref(Box<Expr<'t>>),
     Variable(String),
     IntLiteral(u64),
     BoolLiteral(bool),
@@ -147,6 +148,13 @@ impl<'t> Expr<'t> {
         }
     }
 
+    pub fn deref(inner: Expr<'t>, ctxt: &'t TypeContext<'t>) -> Self {
+        Expr {
+            kind: ExprKind::Deref(Box::new(inner)),
+            ty: Type::infer(ctxt),
+        }
+    }
+
     pub fn ret(ret: Expr<'t>, ctxt: &'t TypeContext<'t>) -> Self {
         Expr {
             kind: ExprKind::Return(Box::new(ret)),
@@ -172,8 +180,8 @@ impl<'t> Expr<'t> {
         match self.kind {
             ExprKind::If {..} | ExprKind::Block(_) => true,
             ExprKind::Call {..} | ExprKind::Binop {..} | ExprKind::Pos(_)
-            | ExprKind::Neg(_) | ExprKind::Not(_) | ExprKind::Ref(_)
-            | ExprKind::Variable(_) | ExprKind::IntLiteral(_)
+            | ExprKind::Neg(_) | ExprKind::Not(_) | ExprKind::Variable(_)
+            | ExprKind::Ref(_) | ExprKind::Deref(_) | ExprKind::IntLiteral(_)
             | ExprKind::BoolLiteral(_) | ExprKind::UnitLiteral
             | ExprKind::Return(_) | ExprKind::Assign {..} => false,
         }
@@ -306,20 +314,36 @@ impl<'t> Expr<'t> {
                 )
             }
             ExprKind::Ref(ref mut inner) => {
-                if let TypeVariant::Reference(to_unify) = *to_unify.variant {
-                    try!(inner.unify_type(ctxt, to_unify,
-                        uf, variables, function, functions));
-                } else {
-                    return Err(AstError::CouldNotUnify {
+                let mut inner_ty = Type::infer(ctxt);
+                inner_ty.generate_inference_id(uf);
+                try!(inner.unify_type(ctxt, inner_ty,
+                    uf, variables, function, functions));
+                let ref_ty = Type::ref_(inner_ty);
+                try!(uf.unify(to_unify, ref_ty).map_err(|()|
+                    AstError::CouldNotUnify {
                         first: to_unify,
                         second: inner.ty,
                         function: function.name.clone(),
                         compiler: fl!(),
-                    });
-                }
-
-                Ok(uf.unify(self.ty, Type::ref_(inner.ty))
-                    .expect("These should never be different"))
+                }));
+                try!(uf.unify(to_unify, ref_ty).map_err(|()|
+                    AstError::CouldNotUnify {
+                        first: to_unify,
+                        second: inner.ty,
+                        function: function.name.clone(),
+                        compiler: fl!(),
+                }));
+                let self_ty = self.ty;
+                uf.unify(self.ty, ref_ty).map_err(|()|
+                    AstError::CouldNotUnify {
+                        first: self_ty,
+                        second: ref_ty,
+                        function: function.name.clone(),
+                        compiler: fl!(),
+                })
+            }
+            ExprKind::Deref(ref mut _inner) => {
+                unimplemented!()
             }
             ExprKind::Binop {
                 op,
@@ -507,13 +531,11 @@ impl<'t> Expr<'t> {
                     ref mut value,
                     ..
                 } => {
-                    *ty = match uf.actual_ty(*ty) {
-                        Some(t) => t,
-                        None => return Err(AstError::NoActualType {
-                            function: function.name.clone(),
+                    try!(ty.finalize(uf).map_err(|()|
+                        AstError::NoActualType {
                             compiler: fl!(),
-                        })
-                    };
+                            function: function.name.clone(),
+                        }));
                     if let Some(ref mut v) = *value {
                         try!(v.finalize_type(uf, function));
                     }
@@ -625,17 +647,19 @@ impl<'t> Expr<'t> {
                 }
             }
             ExprKind::Ref(ref mut inner) => {
-                self.ty = match uf.actual_ty(self.ty) {
-                    Some(t) => t,
-                    None => return Err(AstError::NoActualType {
+                try!(self.ty.finalize(uf).map_err(|()|
+                   AstError::NoActualType {
                         compiler: fl!(),
                         function: function.name.clone(),
-                    })
-                };
+                    }
+                ));
                 try!(inner.finalize_type(uf, function));
                 assert!(self.ty == Type::ref_(inner.ty),
-                    "self: {}, inner: &{}", self.ty, inner.ty);
+                    "self: {:?}, inner: &{:?}", self.ty, inner.ty);
                 Ok(())
+            }
+            ExprKind::Deref(ref mut _inner) => {
+                unimplemented!()
             }
             ExprKind::Binop {
                 ref mut lhs,
@@ -786,6 +810,9 @@ impl<'t> Expr<'t> {
                 } else {
                     (mir::Value::const_unit(), None)
                 }
+            }
+            ExprKind::Deref(_e) => {
+                unimplemented!()
             }
             ExprKind::Binop {
                 op: Operand::AndAnd,
