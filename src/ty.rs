@@ -265,7 +265,7 @@ impl<'t> Type<'t> {
                 }
             }
             TypeVariant::Infer(_) | TypeVariant::InferInt(_) => {
-                match uf.actual_ty(*self) {
+                match uf.resolve(*self) {
                     Some(t) => t.get_final_ty(uf, ctxt),
                     None => return None,
                 }
@@ -344,8 +344,8 @@ impl<'t> UnionFind<'t> {
     }
 
     pub fn unify(&mut self, a: Type<'t>, b: Type<'t>) -> Result<(), ()> {
-        let a_actual = self.actual_ty(a);
-        let b_actual = self.actual_ty(b);
+        let a_actual = self.resolve(a);
+        let b_actual = self.resolve(b);
         match (a_actual, b_actual) {
             (Some(a), Some(b)) => {
                 if a.is_final_type() && b.is_final_type() && a == b {
@@ -424,7 +424,7 @@ impl<'t> UnionFind<'t> {
         }
     }
 
-    pub fn actual_ty(&self, ty: Type<'t>) -> Option<Type<'t>> {
+    pub fn resolve(&self, ty: Type<'t>) -> Option<Type<'t>> {
         match *ty.variant {
             TypeVariant::Infer(Some(id)) | TypeVariant::InferInt(Some(id)) => {
                 self.parents_ty[self.find(id) as usize]
