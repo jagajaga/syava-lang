@@ -19,6 +19,8 @@ enum Either<L, R> {
     Right(R),
 }
 
+// TODO: unify parameter ordering
+
 mod parse;
 mod ast;
 mod ty;

@@ -31,15 +31,12 @@ impl<'t> TypeContext<'t> {
 
 #[derive(Copy, Clone)]
 pub struct Type<'t> {
-    pub context: &'t TypeContext<'t>,
     pub variant: &'t TypeVariant<'t>,
 }
 
 impl<'t> PartialEq for Type<'t> {
     fn eq(&self, rhs: &Self) -> bool {
-        self.context as *const TypeContext<'t> ==
-            rhs.context as *const TypeContext<'t> &&
-            self.variant == rhs.variant
+        self.variant as *const _ == rhs.variant as *const _
     }
 }
 
@@ -47,7 +44,6 @@ impl<'t> Eq for Type<'t> { }
 
 impl<'t> std::hash::Hash for Type<'t> {
     fn hash<H>(&self, state: &mut H) where H: std::hash::Hasher {
-        (self.context as *const _).hash(state);
         (self.variant as *const _).hash(state);
     }
 }
@@ -72,53 +68,45 @@ impl<'t> std::fmt::Debug for Type<'t> {
 impl<'t> Type<'t> {
     pub fn infer(ctxt: &'t TypeContext<'t>) -> Self {
         Type {
-            context: ctxt,
             variant: ctxt.get(TypeVariant::Infer(None)),
         }
     }
 
     pub fn infer_int(ctxt: &'t TypeContext<'t>) -> Self {
         Type {
-            context: ctxt,
             variant: ctxt.get(TypeVariant::InferInt(None)),
         }
     }
 
     pub fn sint(int: Int, ctxt: &'t TypeContext<'t>) -> Self {
         Type {
-            context: ctxt,
             variant: ctxt.get(TypeVariant::SInt(int)),
         }
     }
     pub fn uint(int: Int, ctxt: &'t TypeContext<'t>) -> Self {
         Type {
-            context: ctxt,
             variant: ctxt.get(TypeVariant::UInt(int)),
         }
     }
     pub fn bool(ctxt: &'t TypeContext<'t>) -> Self {
         Type {
-            context: ctxt,
             variant: ctxt.get(TypeVariant::Bool),
         }
     }
     pub fn unit(ctxt: &'t TypeContext<'t>) -> Self {
         Type {
-            context: ctxt,
             variant: ctxt.get(TypeVariant::Unit),
         }
     }
     pub fn diverging(ctxt: &'t TypeContext<'t>) -> Self {
         Type {
-            context: ctxt,
             variant: ctxt.get(TypeVariant::Diverging),
         }
     }
 
-    pub fn ref_(ty: Type<'t>) -> Self {
+    pub fn ref_(ty: Type<'t>, ctxt: &'t TypeContext<'t>) -> Self {
         Type {
-            context: ty.context,
-            variant: ty.context.get(TypeVariant::Reference(ty))
+            variant: ctxt.get(TypeVariant::Reference(ty))
         }
     }
 }
@@ -226,24 +214,24 @@ impl<'t> Type<'t> {
         }
     }
 
-    pub fn generate_inference_id(&mut self, uf: &mut UnionFind<'t>) {
-        self.variant = self.get_inference_type(uf);
+    pub fn generate_inference_id(&mut self, uf: &mut UnionFind<'t>,
+            ctxt: &'t TypeContext<'t>) {
+        self.variant = self.get_inference_type(uf, ctxt);
     }
 
-    fn get_inference_type(&self, uf: &mut UnionFind<'t>)
-            -> &'t TypeVariant<'t> {
+    fn get_inference_type(&self, uf: &mut UnionFind<'t>,
+            ctxt: &'t TypeContext<'t>) -> &'t TypeVariant<'t> {
         match *self.variant {
             TypeVariant::Infer(None) => {
-                self.context.get(TypeVariant::Infer(Some(uf.next_id())))
+                ctxt.get(TypeVariant::Infer(Some(uf.next_id())))
             }
             TypeVariant::InferInt(None) => {
-                self.context.get(TypeVariant::InferInt(Some(uf.next_id())))
+                ctxt.get(TypeVariant::InferInt(Some(uf.next_id())))
             }
             TypeVariant::Reference(inner) => {
-                self.context.get(TypeVariant::Reference(
+                ctxt.get(TypeVariant::Reference(
                     Type {
-                        context: inner.context,
-                        variant: inner.get_inference_type(uf),
+                        variant: inner.get_inference_type(uf, ctxt),
                     }
                 ))
             }
@@ -254,15 +242,16 @@ impl<'t> Type<'t> {
         }
     }
 
-    pub fn finalize(&mut self, uf: &mut UnionFind<'t>) -> Result<(), ()> {
-        *self = match self.get_final_ty(uf) {
+    pub fn finalize(&mut self, uf: &mut UnionFind<'t>,
+            ctxt: &'t TypeContext<'t>) -> Result<(), ()> {
+        *self = match self.get_final_ty(uf, ctxt) {
             Some(t) => t,
             None => return Err(())
         };
         Ok(())
     }
 
-    fn get_final_ty(&self, uf: &mut UnionFind<'t>)
+    fn get_final_ty(&self, uf: &mut UnionFind<'t>, ctxt: &'t TypeContext<'t>)
             -> Option<Type<'t>> {
         match *self.variant {
             TypeVariant::SInt(_) | TypeVariant::UInt(_) | TypeVariant::Bool
@@ -270,14 +259,14 @@ impl<'t> Type<'t> {
                 Some(*self)
             }
             TypeVariant::Reference(inner) => {
-                match inner.get_final_ty(uf) {
-                    Some(inner) => Some(Type::ref_(inner)),
+                match inner.get_final_ty(uf, ctxt) {
+                    Some(inner) => Some(Type::ref_(inner, ctxt)),
                     None => None,
                 }
             }
             TypeVariant::Infer(_) | TypeVariant::InferInt(_) => {
                 match uf.actual_ty(*self) {
-                    Some(t) => t.get_final_ty(uf),
+                    Some(t) => t.get_final_ty(uf, ctxt),
                     None => return None,
                 }
             }

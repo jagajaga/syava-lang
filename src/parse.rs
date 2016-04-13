@@ -672,11 +672,11 @@ impl<'src> Parser<'src> {
             }
             Token::Operand(Operand::And) => {
                 let inner = try!(self.parse_ty(ctxt, line));
-                Ok(Type::ref_(inner))
+                Ok(Type::ref_(inner, ctxt))
             }
             Token::Operand(Operand::AndAnd) => {
                 let inner = try!(self.parse_ty(ctxt, line));
-                Ok(Type::ref_(Type::ref_(inner)))
+                Ok(Type::ref_(Type::ref_(inner, ctxt), ctxt))
             }
             tok => Err(ParserError::UnexpectedToken {
                 found: tok,

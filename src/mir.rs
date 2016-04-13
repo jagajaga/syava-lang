@@ -189,13 +189,48 @@ impl<'t> LlFunction<'t> {
 }
 
 #[derive(Clone, Debug)]
-enum ValueLeaf<'t> {
-    ConstInt {
+enum Const<'t> {
+    Int {
         value: u64,
         ty: Type<'t>,
     },
-    ConstBool(bool),
-    ConstUnit,
+    Bool(bool),
+    Unit,
+}
+
+impl<'t> Const<'t> {
+    unsafe fn to_llvm(self, ctxt: &'t TypeContext<'t>) -> LLVMValueRef {
+        match self {
+            Const::Int {
+                value,
+                ty,
+            } => {
+                LLVMConstInt(ty.to_llvm(), value, false as LLVMBool)
+            }
+            Const::Bool(value) => {
+                LLVMConstInt(Type::bool(ctxt).to_llvm(), value as u64,
+                    false as LLVMBool)
+            }
+            Const::Unit => {
+                LLVMConstStruct([].as_mut_ptr(), 0, false as LLVMBool)
+            }
+        }
+    }
+    fn ty(&self, ctxt: &'t TypeContext<'t>) -> Type<'t> {
+        match *self {
+            Const::Int {
+                ty,
+                ..
+            } => ty,
+            Const::Bool(_) => Type::bool(ctxt),
+            Const::Unit => Type::unit(ctxt),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum ValueLeaf<'t> {
+    Const(Const<'t>),
     Parameter(Parameter),
     Variable(Variable),
     Temporary(Temporary),
@@ -205,12 +240,7 @@ impl<'t> ValueLeaf<'t> {
     fn ty(&self, function: &Function<'t>, ctxt: &'t TypeContext<'t>)
             -> Type<'t> {
         match *self {
-            ValueLeaf::ConstInt {
-                ty,
-                ..
-            } => ty,
-            ValueLeaf::ConstBool(_) => Type::bool(ctxt),
-            ValueLeaf::ConstUnit => Type::unit(ctxt),
+            ValueLeaf::Const(ref inner) => inner.ty(ctxt),
             ValueLeaf::Temporary(ref tmp) => function.get_tmp_ty(tmp),
             ValueLeaf::Parameter(ref par) => function.get_par_ty(par),
             ValueLeaf::Variable(ref var) => function.get_local_ty(var),
@@ -221,18 +251,8 @@ impl<'t> ValueLeaf<'t> {
             ctxt: &'t TypeContext<'t>)
             -> LLVMValueRef {
         match self {
-            ValueLeaf::ConstInt {
-                value,
-                ty,
-            } => {
-                LLVMConstInt(ty.to_llvm(), value, false as LLVMBool)
-            }
-            ValueLeaf::ConstBool(value) => {
-                LLVMConstInt(Type::bool(ctxt).to_llvm(), value as u64,
-                    false as LLVMBool)
-            }
-            ValueLeaf::ConstUnit => {
-                LLVMConstStruct([].as_mut_ptr(), 0, false as LLVMBool)
+            ValueLeaf::Const(inner) => {
+                inner.to_llvm(ctxt)
             }
             ValueLeaf::Temporary(tmp) => {
                 function.get_tmp_value(&tmp)
@@ -295,19 +315,19 @@ impl<'t> Value<'t> {
     #[inline(always)]
     pub fn const_int(value: u64, ty: Type<'t>) -> Self {
         Value::leaf(
-            ValueLeaf::ConstInt {
+            ValueLeaf::Const(Const::Int {
                 value: value,
                 ty: ty,
             }
-        )
+        ))
     }
     #[inline(always)]
     pub fn const_bool(value: bool) -> Self {
-        Value::leaf(ValueLeaf::ConstBool(value))
+        Value::leaf(ValueLeaf::Const(Const::Bool(value)))
     }
     #[inline(always)]
     pub fn const_unit() -> Value<'t> {
-        Value::leaf(ValueLeaf::ConstUnit)
+        Value::leaf(ValueLeaf::Const(Const::Unit))
     }
 
     pub fn param(arg_num: u32, function: &mut Function) -> Self {
@@ -345,7 +365,7 @@ impl<'t> Value<'t> {
             fn_types: &HashMap<String, ty::Function<'t>>,
             ctxt: &'t TypeContext<'t>) -> Self {
         let inner_ty = inner.ty(function, fn_types, ctxt);
-        let ptr = function.new_tmp(Type::ref_(inner_ty));
+        let ptr = function.new_tmp(Type::ref_(inner_ty, ctxt));
         block.write_ref(Lvalue::Temporary(ptr), inner, function, fn_types,
             ctxt);
         Value::leaf(ValueLeaf::Temporary(ptr))
@@ -499,7 +519,8 @@ impl<'t> Value<'t> {
             ValueKind::Pos(ref inner) | ValueKind::Neg(ref inner)
             | ValueKind::Not(ref inner) => inner.ty(function, ctxt),
 
-            ValueKind::Ref(ref inner) => Type::ref_(inner.ty(function, ctxt)),
+            ValueKind::Ref(ref inner) =>
+                Type::ref_(inner.ty(function, ctxt), ctxt),
             ValueKind::Deref(ref inner) => {
                 if let TypeVariant::Reference(inner) =
                         *inner.ty(function, ctxt).variant {
@@ -887,6 +908,19 @@ impl Block {
             fn_types: &HashMap<String, ty::Function<'t>>,
             ctxt: &'t TypeContext<'t>) {
         let leaf = function.get_leaf(val, self, fn_types, ctxt);
+        let leaf = match leaf {
+            l @ ValueLeaf::Const(_) => {
+                let ty = l.ty(function, ctxt);
+                let tmp = function.new_tmp(ty);
+                self.add_stmt(Lvalue::Temporary(tmp), Value::leaf(l),
+                    function);
+                ValueLeaf::Temporary(tmp)
+            }
+            ValueLeaf::Parameter(_) => {
+                panic!("ICE: Attempted to write_ref a parameter");
+            }
+            l @ ValueLeaf::Temporary(_) | l @ ValueLeaf::Variable(_) => l,
+        };
         self.add_stmt(ptr, Value(ValueKind::Ref(leaf)), function);
     }
 
@@ -1140,21 +1174,29 @@ impl std::fmt::Display for Lvalue {
     }
 }
 
+impl<'t> std::fmt::Display for Const<'t> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        match *self {
+            Const::Int {
+                ref ty,
+                ref value,
+            } => {
+                match *ty.variant {
+                    TypeVariant::SInt(_) => write!(f, "{}", *value as i64),
+                    TypeVariant::UInt(_) => write!(f, "{}", *value as u64),
+                    _ => panic!("Non-integer int"),
+                }
+            }
+            Const::Bool(ref value) => write!(f, "{}", value),
+            Const::Unit => write!(f, "()"),
+        }
+    }
+}
+
 impl<'t> std::fmt::Display for ValueLeaf<'t> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
         match *self {
-            ValueLeaf::ConstInt {
-                value,
-                ty,
-            } => {
-                match *ty.variant {
-                    TypeVariant::UInt(_) => write!(f, "const {}{}", value, ty),
-                    TypeVariant::SInt(_) => write!(f, "const {}{}", value as i64, ty),
-                    _ => panic!("ICE: non-integer typed integer: {}", ty),
-                }
-            },
-            ValueLeaf::ConstBool(value) => write!(f, "const {}", value),
-            ValueLeaf::ConstUnit => write!(f, "const ()"),
+            ValueLeaf::Const(ref inner) => write!(f, "const {}", inner),
             ValueLeaf::Temporary(ref tmp) => write!(f, "tmp{}", tmp.0),
             ValueLeaf::Parameter(ref par) => write!(f, "arg{}", par.0),
             ValueLeaf::Variable(ref var) => write!(f, "var{}", var.0),

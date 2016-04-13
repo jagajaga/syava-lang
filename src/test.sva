@@ -1,8 +1,7 @@
 fn main() -> u32 {
-    let x = 0;
-    deref(&x)
+    deref(&0)
 }
 
 fn deref(x: &u32) -> u32 {
-    *x + 1
+    **&x + 1
 }

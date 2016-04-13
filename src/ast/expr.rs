@@ -144,7 +144,7 @@ impl<'t> Expr<'t> {
     pub fn ref_(inner: Expr<'t>, ctxt: &'t TypeContext<'t>) -> Self {
         Expr {
             kind: ExprKind::Ref(Box::new(inner)),
-            ty: Type::ref_(Type::infer(ctxt)),
+            ty: Type::ref_(Type::infer(ctxt), ctxt),
         }
     }
 
@@ -205,7 +205,7 @@ impl<'t> Expr<'t> {
                     ref mut ty,
                     ref mut value,
                 } => {
-                    ty.generate_inference_id(uf);
+                    ty.generate_inference_id(uf, ctxt);
                     if let Some(ref mut v) = *value {
                         try!(v.unify_type(
                             ctxt, *ty, uf, variables, function, functions));
@@ -223,7 +223,7 @@ impl<'t> Expr<'t> {
                 }
                 Stmt::Expr(ref mut e) => {
                     let mut ty = Type::infer(ctxt);
-                    ty.generate_inference_id(uf);
+                    ty.generate_inference_id(uf, ctxt);
                     try!(e.unify_type(ctxt, ty, uf, variables,
                         function, functions));
                 }
@@ -256,7 +256,7 @@ impl<'t> Expr<'t> {
             function: &Function<'t>,
             functions: &HashMap<String, ty::Function<'t>>)
             -> Result<(), AstError<'t>> {
-        self.ty.generate_inference_id(uf);
+        self.ty.generate_inference_id(uf, ctxt);
         match self.kind {
             ExprKind::IntLiteral(_) | ExprKind::BoolLiteral(_)
             | ExprKind::UnitLiteral => {
@@ -315,10 +315,10 @@ impl<'t> Expr<'t> {
             }
             ExprKind::Ref(ref mut inner) => {
                 let mut inner_ty = Type::infer(ctxt);
-                inner_ty.generate_inference_id(uf);
+                inner_ty.generate_inference_id(uf, ctxt);
                 try!(inner.unify_type(ctxt, inner_ty,
                     uf, variables, function, functions));
-                let ref_ty = Type::ref_(inner_ty);
+                let ref_ty = Type::ref_(inner_ty, ctxt);
                 try!(uf.unify(to_unify, ref_ty).map_err(|()|
                     AstError::CouldNotUnify {
                         first: to_unify,
@@ -344,7 +344,7 @@ impl<'t> Expr<'t> {
             }
             ExprKind::Deref(ref mut inner) => {
                 let mut outer_ty = Type::infer(ctxt);
-                outer_ty.generate_inference_id(uf);
+                outer_ty.generate_inference_id(uf, ctxt);
                 let self_ty = self.ty;
                 try!(uf.unify(self.ty, outer_ty).map_err(|()|
                     AstError::CouldNotUnify {
@@ -361,7 +361,7 @@ impl<'t> Expr<'t> {
                         compiler: fl!(),
                 }));
 
-                let inner_ty = Type::ref_(outer_ty);
+                let inner_ty = Type::ref_(outer_ty, ctxt);
                 inner.unify_type(ctxt, inner_ty,
                     uf, variables, function, functions)
             }
@@ -396,7 +396,7 @@ impl<'t> Expr<'t> {
                     | Operand::GreaterThan
                     | Operand::GreaterThanEquals => {
                         self.ty = Type::bool(ctxt);
-                        rhs.ty.generate_inference_id(uf);
+                        rhs.ty.generate_inference_id(uf, ctxt);
                         try!(lhs.unify_type(ctxt, rhs.ty,
                             uf, variables, function, functions));
                         try!(rhs.unify_type(ctxt, lhs.ty,
@@ -534,7 +534,8 @@ impl<'t> Expr<'t> {
     }
 
     pub fn finalize_block_ty(block: &mut Block<'t>,
-            uf: &mut ty::UnionFind<'t>, function: &Function<'t>)
+            uf: &mut ty::UnionFind<'t>, function: &Function<'t>,
+            ctxt: &'t TypeContext<'t>)
             -> Result<(), AstError<'t>> {
         let mut live_blk = true;
 
@@ -551,24 +552,24 @@ impl<'t> Expr<'t> {
                     ref mut value,
                     ..
                 } => {
-                    try!(ty.finalize(uf).map_err(|()|
+                    try!(ty.finalize(uf, ctxt).map_err(|()|
                         AstError::NoActualType {
                             compiler: fl!(),
                             function: function.name.clone(),
                         }));
                     if let Some(ref mut v) = *value {
-                        try!(v.finalize_type(uf, function));
+                        try!(v.finalize_type(uf, function, ctxt));
                     }
                 }
                 Stmt::Expr(ref mut e @ Expr {
                     kind: ExprKind::Return(_),
                     ..
                 }) => {
-                    try!(e.finalize_type(uf, function));
+                    try!(e.finalize_type(uf, function, ctxt));
                     live_blk = false;
                 }
                 Stmt::Expr(ref mut e) => {
-                    try!(e.finalize_type(uf, function));
+                    try!(e.finalize_type(uf, function, ctxt));
                 }
             }
         }
@@ -580,34 +581,28 @@ impl<'t> Expr<'t> {
                     compiler: fl!(),
                 });
             }
-            try!(expr.finalize_type(uf, function));
+            try!(expr.finalize_type(uf, function, ctxt));
         }
         Ok(())
     }
 
     pub fn finalize_type(&mut self, uf: &mut ty::UnionFind<'t>,
-            function: &Function<'t>) -> Result<(), AstError<'t>> {
+            function: &Function<'t>, ctxt: &'t TypeContext<'t>)
+            -> Result<(), AstError<'t>> {
+        try!(self.ty.finalize(uf, ctxt).map_err(|()|
+           AstError::NoActualType {
+                compiler: fl!(),
+                function: function.name.clone(),
+            }
+        ));
+
         match self.kind {
             ExprKind::IntLiteral(_) | ExprKind::BoolLiteral(_)
             | ExprKind::UnitLiteral | ExprKind::Variable(_) => {
-                self.ty = match uf.actual_ty(self.ty) {
-                    Some(t) => t,
-                    None => return Err(AstError::NoActualType {
-                        compiler: fl!(),
-                        function: function.name.clone(),
-                    })
-                };
                 Ok(())
             }
             ExprKind::Pos(ref mut inner) => {
-                self.ty = match uf.actual_ty(self.ty) {
-                    Some(t) => t,
-                    None => return Err(AstError::NoActualType {
-                        compiler: fl!(),
-                        function: function.name.clone(),
-                    })
-                };
-                try!(inner.finalize_type(uf, function));
+                try!(inner.finalize_type(uf, function, ctxt));
                 assert!(self.ty == inner.ty);
                 match *self.ty.variant {
                     TypeVariant::SInt(_) | TypeVariant::UInt(_) => Ok(()),
@@ -622,14 +617,7 @@ impl<'t> Expr<'t> {
                 }
             }
             ExprKind::Neg(ref mut inner) => {
-                self.ty = match uf.actual_ty(self.ty) {
-                    Some(t) => t,
-                    None => return Err(AstError::NoActualType {
-                        compiler: fl!(),
-                        function: function.name.clone(),
-                    })
-                };
-                try!(inner.finalize_type(uf, function));
+                try!(inner.finalize_type(uf, function, ctxt));
                 assert!(self.ty == inner.ty);
                 match *self.ty.variant {
                     TypeVariant::SInt(_) => Ok(()),
@@ -644,14 +632,7 @@ impl<'t> Expr<'t> {
                 }
             }
             ExprKind::Not(ref mut inner) => {
-                self.ty = match uf.actual_ty(self.ty) {
-                    Some(t) => t,
-                    None => return Err(AstError::NoActualType {
-                        compiler: fl!(),
-                        function: function.name.clone(),
-                    })
-                };
-                try!(inner.finalize_type(uf, function));
+                try!(inner.finalize_type(uf, function, ctxt));
                 assert!(self.ty == inner.ty);
                 match *self.ty.variant {
                     TypeVariant::SInt(_) | TypeVariant::UInt(_)
@@ -667,26 +648,14 @@ impl<'t> Expr<'t> {
                 }
             }
             ExprKind::Ref(ref mut inner) => {
-                try!(self.ty.finalize(uf).map_err(|()|
-                   AstError::NoActualType {
-                        compiler: fl!(),
-                        function: function.name.clone(),
-                    }
-                ));
-                try!(inner.finalize_type(uf, function));
-                assert!(self.ty == Type::ref_(inner.ty),
+                try!(inner.finalize_type(uf, function, ctxt));
+                assert!(self.ty == Type::ref_(inner.ty, ctxt),
                     "self: {:?}, inner: &{:?}", self.ty, inner.ty);
                 Ok(())
             }
             ExprKind::Deref(ref mut inner) => {
-                try!(self.ty.finalize(uf).map_err(|()|
-                   AstError::NoActualType {
-                        compiler: fl!(),
-                        function: function.name.clone(),
-                    }
-                ));
-                try!(inner.finalize_type(uf, function));
-                assert!(Type::ref_(self.ty) == inner.ty,
+                try!(inner.finalize_type(uf, function, ctxt));
+                assert!(Type::ref_(self.ty, ctxt) == inner.ty,
                     "self: {:?}, inner: *{:?}", self.ty, inner.ty);
                 Ok(())
             }
@@ -695,30 +664,15 @@ impl<'t> Expr<'t> {
                 ref mut rhs,
                 ..
             } => {
-                self.ty = match uf.actual_ty(self.ty) {
-                    Some(t) => t,
-                    None => return Err(AstError::NoActualType {
-                        compiler: fl!(),
-                        function: function.name.clone(),
-                    })
-                };
-                try!(lhs.finalize_type(uf, function));
-                rhs.finalize_type(uf, function)
+                try!(lhs.finalize_type(uf, function, ctxt));
+                rhs.finalize_type(uf, function, ctxt)
             }
             ExprKind::Call {
                 ref mut args,
                 ..
             } => {
-                self.ty = match uf.actual_ty(self.ty) {
-                    Some(t) => t,
-                    None =>
-                        return Err(AstError::NoActualType {
-                            function: function.name.clone(),
-                            compiler: fl!(),
-                        })
-                };
                 for arg in args {
-                    try!(arg.finalize_type(uf, function));
+                    try!(arg.finalize_type(uf, function, ctxt));
                 }
                 Ok(())
             }
@@ -727,44 +681,23 @@ impl<'t> Expr<'t> {
                 ref mut then_value,
                 ref mut else_value,
             } => {
-                self.ty = match uf.actual_ty(self.ty) {
-                    Some(t) => t,
-                    None => return Err(AstError::NoActualType {
-                        function: function.name.clone(),
-                        compiler: fl!(),
-                    })
-                };
-                try!(condition.finalize_type(uf, function));
-                try!(Self::finalize_block_ty(then_value, uf, function));
-                Self::finalize_block_ty(else_value, uf, function)
+                try!(condition.finalize_type(uf, function, ctxt));
+                try!(Self::finalize_block_ty(then_value, uf, function, ctxt));
+                Self::finalize_block_ty(else_value, uf, function, ctxt)
             }
             ExprKind::Block(ref mut blk) => {
-                self.ty = match uf.actual_ty(self.ty) {
-                    Some(t) => t,
-                    None => return Err(AstError::NoActualType {
-                        function: function.name.clone(),
-                        compiler: fl!(),
-                    })
-                };
-                Self::finalize_block_ty(blk, uf, function)
+                Self::finalize_block_ty(blk, uf, function, ctxt)
             }
             ExprKind::Return(ref mut ret) => {
-                self.ty = match uf.actual_ty(self.ty) {
-                    Some(t @ Type { variant: &TypeVariant::Diverging, .. }) => t,
-                    Some(t) =>
-                        panic!("ICE: return is typed {:#?}; should be {:?}",
-                            t, TypeVariant::Diverging),
-                    None =>
-                        panic!("ICE: return with no type (should be {:?})",
-                            TypeVariant::Diverging)
-                };
-                ret.finalize_type(uf, function)
+                assert!(*self.ty.variant == TypeVariant::Diverging);
+                ret.finalize_type(uf, function, ctxt)
             }
             ExprKind::Assign {
                 ref mut src,
                 ..
             } => {
-                src.finalize_type(uf, function)
+                assert!(*self.ty.variant == TypeVariant::Unit);
+                src.finalize_type(uf, function, ctxt)
             }
         }
     }

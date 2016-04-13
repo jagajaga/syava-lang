@@ -61,7 +61,7 @@ impl<'t> Ast<'t> {
             let mut vars = HashMap::<String, Type>::new();
             try!(Expr::typeck_block(body, &self.ctxt, func.ret_ty,
                 &mut uf, &mut vars, func, &self.function_types));
-            try!(Expr::finalize_block_ty(body, &mut uf, func));
+            try!(Expr::finalize_block_ty(body, &mut uf, func, &self.ctxt));
         }
         let mut mir = mir::Mir::new(self.ctxt);
         let functions = std::mem::replace(&mut self.functions, HashMap::new());
