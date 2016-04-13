@@ -257,6 +257,7 @@ enum ValueKind<'t> {
     Not(ValueLeaf<'t>),
 
     Ref(ValueLeaf<'t>),
+    Deref(ValueLeaf<'t>),
 
     // -- binops --
     Add(ValueLeaf<'t>, ValueLeaf<'t>),
@@ -348,6 +349,13 @@ impl<'t> Value<'t> {
         block.write_ref(Lvalue::Temporary(ptr), inner, function, fn_types,
             ctxt);
         Value::leaf(ValueLeaf::Temporary(ptr))
+    }
+
+    pub fn deref(inner: Self, function: &mut Function<'t>, block: &mut Block,
+            fn_types: &HashMap<String, ty::Function<'t>>,
+            ctxt: &'t TypeContext<'t>) -> Self {
+        Value(ValueKind::Deref(function.get_leaf(
+            inner, block, fn_types, ctxt)))
     }
 
     // -- binops --
@@ -492,6 +500,14 @@ impl<'t> Value<'t> {
             | ValueKind::Not(ref inner) => inner.ty(function, ctxt),
 
             ValueKind::Ref(ref inner) => Type::ref_(inner.ty(function, ctxt)),
+            ValueKind::Deref(ref inner) => {
+                if let TypeVariant::Reference(inner) =
+                        *inner.ty(function, ctxt).variant {
+                    inner
+                } else {
+                    panic!("Deref of a non-ref type: {:?}", inner)
+                }
+            }
 
             ValueKind::Add(ref lhs, ref rhs)
             | ValueKind::Sub(ref lhs, ref rhs)
@@ -571,6 +587,10 @@ impl<'t> Value<'t> {
                         panic!("Attempted to take reference of parameter"),
                     _ => panic!("Attempted to take reference of const"),
                 }
+            }
+            ValueKind::Deref(inner) => {
+                let llinner = inner.to_llvm(function, ctxt);
+                LLVMBuildLoad(function.builder, llinner, cstr!(""))
             }
             ValueKind::Add(lhs, rhs) => {
                 let ty = lhs.ty(&function.mir, ctxt);
@@ -1150,6 +1170,7 @@ impl<'t> std::fmt::Display for Value<'t> {
             ValueKind::Neg(ref inner) => write!(f, "Neg({})", inner),
             ValueKind::Not(ref inner) => write!(f, "Not({})", inner),
             ValueKind::Ref(ref inner) => write!(f, "&{}", inner),
+            ValueKind::Deref(ref inner) => write!(f, "*{}", inner),
             ValueKind::Add(ref lhs, ref rhs)
                 => write!(f, "Add({}, {})", lhs, rhs),
             ValueKind::Sub(ref lhs, ref rhs)

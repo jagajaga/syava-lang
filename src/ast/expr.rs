@@ -329,7 +329,7 @@ impl<'t> Expr<'t> {
                 try!(uf.unify(to_unify, ref_ty).map_err(|()|
                     AstError::CouldNotUnify {
                         first: to_unify,
-                        second: inner.ty,
+                        second: ref_ty,
                         function: function.name.clone(),
                         compiler: fl!(),
                 }));
@@ -342,8 +342,28 @@ impl<'t> Expr<'t> {
                         compiler: fl!(),
                 })
             }
-            ExprKind::Deref(ref mut _inner) => {
-                unimplemented!()
+            ExprKind::Deref(ref mut inner) => {
+                let mut outer_ty = Type::infer(ctxt);
+                outer_ty.generate_inference_id(uf);
+                let self_ty = self.ty;
+                try!(uf.unify(self.ty, outer_ty).map_err(|()|
+                    AstError::CouldNotUnify {
+                        first: self_ty,
+                        second: outer_ty,
+                        function: function.name.clone(),
+                        compiler: fl!(),
+                }));
+                try!(uf.unify(to_unify, outer_ty).map_err(|()|
+                    AstError::CouldNotUnify {
+                        first: to_unify,
+                        second: outer_ty,
+                        function: function.name.clone(),
+                        compiler: fl!(),
+                }));
+
+                let inner_ty = Type::ref_(outer_ty);
+                inner.unify_type(ctxt, inner_ty,
+                    uf, variables, function, functions)
             }
             ExprKind::Binop {
                 op,
@@ -658,8 +678,17 @@ impl<'t> Expr<'t> {
                     "self: {:?}, inner: &{:?}", self.ty, inner.ty);
                 Ok(())
             }
-            ExprKind::Deref(ref mut _inner) => {
-                unimplemented!()
+            ExprKind::Deref(ref mut inner) => {
+                try!(self.ty.finalize(uf).map_err(|()|
+                   AstError::NoActualType {
+                        compiler: fl!(),
+                        function: function.name.clone(),
+                    }
+                ));
+                try!(inner.finalize_type(uf, function));
+                assert!(Type::ref_(self.ty) == inner.ty,
+                    "self: {:?}, inner: *{:?}", self.ty, inner.ty);
+                Ok(())
             }
             ExprKind::Binop {
                 ref mut lhs,
@@ -811,8 +840,16 @@ impl<'t> Expr<'t> {
                     (mir::Value::const_unit(), None)
                 }
             }
-            ExprKind::Deref(_e) => {
-                unimplemented!()
+            ExprKind::Deref(e) => {
+                let (inner, blk) =
+                    e.translate(function, block, locals, fn_types, ctxt);
+                if let Some(mut blk) = blk {
+                    (mir::Value::deref(inner, &mut function.raw, &mut blk,
+                        fn_types, ctxt),
+                    Some(blk))
+                } else {
+                    (mir::Value::const_unit(), None)
+                }
             }
             ExprKind::Binop {
                 op: Operand::AndAnd,
