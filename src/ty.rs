@@ -373,6 +373,12 @@ impl<'t> UnionFind<'t> {
                         self.union(lid, rid);
                         Ok(())
                     }
+                    (lhs @ TypeVariant::Infer(None), rhs)
+                    | (lhs @ TypeVariant::InferInt(None), rhs)
+                    | (rhs, lhs @ TypeVariant::Infer(None))
+                    | (lhs, rhs @ TypeVariant::InferInt(None)) =>
+                        panic!("ICE: attempted to unify {:?} with {:?}",
+                            lhs, rhs),
                     (l, r)
                         => panic!("actual ty isn't working: {:?}, {:?}", l, r)
                 }
@@ -396,7 +402,11 @@ impl<'t> UnionFind<'t> {
                             }
                         }
                     }
-                    t => panic!("actual ty isn't working: {:?}", t)
+                    t @ TypeVariant::Infer(None)
+                    | t @ TypeVariant::InferInt(None) =>
+                        panic!("ICE: attempted to unify {:?} with {:?}",
+                            ty, t),
+                    t => panic!("ICE: resolve isn't working: {:?}", t)
                 }
             }
             (None, Some(ty)) => {
@@ -418,7 +428,11 @@ impl<'t> UnionFind<'t> {
                             }
                         }
                     }
-                    t => panic!("actual ty isn't working: {:?}", t)
+                    t @ TypeVariant::Infer(None)
+                    | t @ TypeVariant::InferInt(None) =>
+                        panic!("ICE: attempted to unify {:?} with {:?}",
+                            ty, t),
+                    t => panic!("ICE: resolve isn't working: {:?}", t)
                 }
             }
         }
