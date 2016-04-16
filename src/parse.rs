@@ -833,16 +833,12 @@ impl<'src> Parser<'src> {
             }
             Some(tok) => unreachable!("{:?}", tok),
             None => {
-                if let Expr { kind: ExprKind::Variable(name), .. } = lhs {
-                    if let Some(_) = try!(self.maybe_eat(Token::Equals)) {
-                        let assign =
-                            Expr::assign(name,
-                                try!(self.parse_expr(ctxt, line!())),
-                                ctxt);
-                        Ok(Some(assign))
-                    } else {
-                        Ok(Some(Expr::var(name, ctxt)))
-                    }
+                if let Some(_) = try!(self.maybe_eat(Token::Equals)) {
+                    let assign =
+                        Expr::assign(lhs,
+                            try!(self.parse_expr(ctxt, line!())),
+                            ctxt);
+                    Ok(Some(assign))
                 } else {
                     Ok(Some(lhs))
                 }

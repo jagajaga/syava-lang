@@ -53,7 +53,7 @@ impl<'t> Function<'t> {
         START_BLOCK
     }
 
-    fn new_block(&mut self, expr: Lvalue, term: Terminator<'t>) -> Block {
+    fn new_block(&mut self, expr: Lvalue<'t>, term: Terminator<'t>) -> Block {
         self.blocks.push(BlockData::new(expr, term));
         Block(self.blocks.len() - 1)
     }
@@ -97,9 +97,9 @@ impl<'t> Function<'t> {
     }
 
     fn build(self, llfunc: LLVMValueRef,
-             llvm_funcs: &HashMap<String, LLVMValueRef>,
+             funcs: &HashMap<String, (LLVMValueRef, Type<'t>)>,
              ctxt: &'t TypeContext<'t>) {
-        LlFunction::build(self, llfunc, llvm_funcs, ctxt)
+        LlFunction::build(self, llfunc, funcs, ctxt)
     }
 }
 
@@ -115,7 +115,7 @@ struct LlFunction<'t> {
 
 impl<'t> LlFunction<'t> {
     fn build(mir: Function<'t>, llfunc: LLVMValueRef,
-            llvm_funcs: &HashMap<String, LLVMValueRef>,
+            funcs: &HashMap<String, (LLVMValueRef, Type<'t>)>,
             ctxt: &'t TypeContext<'t>) {
         unsafe {
             let builder = LLVMCreateBuilder();
@@ -156,7 +156,7 @@ impl<'t> LlFunction<'t> {
                 i -= 1;
                 LLVMPositionBuilderAtEnd(self_.builder, self_.blocks[i]);
                 for stmt in blk.statements {
-                    stmt.to_llvm(&mut self_, llvm_funcs, ctxt);
+                    stmt.to_llvm(&mut self_, funcs, ctxt);
                 }
                 blk.terminator.to_llvm(&self_, ctxt);
             }
@@ -188,7 +188,7 @@ impl<'t> LlFunction<'t> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 enum Const<'t> {
     Int {
         value: u64,
@@ -228,7 +228,7 @@ impl<'t> Const<'t> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 enum ValueLeaf<'t> {
     Const(Const<'t>),
     Parameter(Parameter),
@@ -565,7 +565,7 @@ impl<'t> Value<'t> {
     }
 
     unsafe fn to_llvm(self, function: &mut LlFunction<'t>,
-            llvm_funcs: &HashMap<String, LLVMValueRef>,
+            funcs: &HashMap<String, (LLVMValueRef, Type<'t>)>,
             ctxt: &'t TypeContext<'t>) -> LLVMValueRef {
         use llvm_sys::LLVMIntPredicate::*;
         match self.0 {
@@ -808,35 +808,44 @@ impl<'t> Value<'t> {
             } => {
                 let mut args = args.into_iter().map(|a|
                     a.to_llvm(function, ctxt)).collect::<Vec<_>>();
-                let callee = *llvm_funcs.get(&callee).unwrap();
-                LLVMBuildCall(function.builder, callee, args.as_mut_ptr(),
-                    args.len() as u32, cstr!(""))
+                let (callee, output) = *funcs.get(&callee).unwrap();
+                let llret = LLVMBuildCall(function.builder, callee,
+                    args.as_mut_ptr(), args.len() as u32, cstr!(""));
+
+                if *output.variant == TypeVariant::Unit ||
+                        *output.variant == TypeVariant::Diverging {
+                    LLVMConstStruct([].as_mut_ptr(), 0, false as LLVMBool)
+                } else {
+                    llret
+                }
             }
         }
     }
 }
 
 #[derive(Copy, Clone, Debug)]
-enum Lvalue {
+enum Lvalue<'t> {
     Variable(Variable),
     Temporary(Temporary),
+    Deref(ValueLeaf<'t>),
     Return,
 }
 
 #[derive(Debug)]
-struct Statement<'t>(Lvalue, Value<'t>);
+struct Statement<'t>(Lvalue<'t>, Value<'t>);
 
 impl<'t> Statement<'t> {
     unsafe fn to_llvm(self, function: &mut LlFunction<'t>,
-            llvm_funcs: &HashMap<String, LLVMValueRef>,
+            funcs: &HashMap<String, (LLVMValueRef, Type<'t>)>,
             ctxt: &'t TypeContext<'t>) {
         let dst = match self.0 {
             Lvalue::Return => function.ret_ptr,
             Lvalue::Temporary(tmp) => function.get_tmp_ptr(&tmp),
             Lvalue::Variable(var) => function.get_local_ptr(&var),
+            Lvalue::Deref(ptr) => ptr.to_llvm(function, ctxt),
         };
         LLVMBuildStore(function.builder,
-            (self.1).to_llvm(function, llvm_funcs, ctxt), dst);
+            (self.1).to_llvm(function, funcs, ctxt), dst);
     }
 }
 
@@ -897,13 +906,26 @@ impl Block {
     pub fn write_to_tmp<'t>(&mut self, val: Value<'t>,
             function: &mut Function<'t>,
             fn_types: &HashMap<String, ty::Function<'t>>,
-            ctxt: &'t TypeContext<'t>) {
+            ctxt: &'t TypeContext<'t>) -> Value<'t> {
         let ty = val.ty(function, fn_types, ctxt);
         let tmp = function.new_tmp(ty);
-        self.add_stmt(Lvalue::Temporary(tmp), val, function)
+        self.add_stmt(Lvalue::Temporary(tmp), val, function);
+        Value::leaf(ValueLeaf::Temporary(tmp))
     }
 
-    fn write_ref<'t>(&mut self, ptr: Lvalue, val: Value<'t>,
+    pub fn write_to_ptr<'t>(&mut self, ptr: Value<'t>, val: Value<'t>,
+            function: &mut Function<'t>,
+            fn_types: &HashMap<String, ty::Function<'t>>,
+            ctxt: &'t TypeContext<'t>) {
+        let leaf = function.get_leaf(ptr, self, fn_types, ctxt);
+        if let TypeVariant::Reference(_) = *leaf.ty(function, ctxt).variant {
+        } else {
+            panic!("writing to a not-pointer: {}", leaf.ty(function, ctxt))
+        }
+        self.add_stmt(Lvalue::Deref(leaf), val, function)
+    }
+
+    fn write_ref<'t>(&mut self, ptr: Lvalue<'t>, val: Value<'t>,
             function: &mut Function<'t>,
             fn_types: &HashMap<String, ty::Function<'t>>,
             ctxt: &'t TypeContext<'t>) {
@@ -924,7 +946,7 @@ impl Block {
         self.add_stmt(ptr, Value(ValueKind::Ref(leaf)), function);
     }
 
-    fn add_stmt<'t>(&mut self, lvalue: Lvalue, value: Value<'t>,
+    fn add_stmt<'t>(&mut self, lvalue: Lvalue<'t>, value: Value<'t>,
             function: &mut Function<'t>) {
         let blk = function.get_block(self);
         blk.statements.push(Statement(lvalue, value))
@@ -992,13 +1014,13 @@ impl Block {
 
 #[derive(Debug)]
 struct BlockData<'t> {
-    expr: Lvalue,
+    expr: Lvalue<'t>,
     statements: Vec<Statement<'t>>,
     terminator: Terminator<'t>,
 }
 
 impl<'t> BlockData<'t> {
-    fn new(expr: Lvalue, term: Terminator<'t>) -> BlockData<'t> {
+    fn new(expr: Lvalue<'t>, term: Terminator<'t>) -> BlockData<'t> {
         BlockData {
             expr: expr,
             statements: Vec::new(),
@@ -1052,34 +1074,34 @@ impl<'t> Mir<'t> {
                 let llfunc = LLVMAddFunction(module,
                     CString::new(name.clone()).unwrap().as_ptr(),
                     function.ty.to_llvm());
-                llvm_functions.insert(name.clone(), llfunc);
+                llvm_functions.insert(name.clone(),
+                    (llfunc, function.ty.output()));
             }
 
             for (name, function) in self.functions {
-                let llfunc = *llvm_functions.get(&name).unwrap();
+                let llfunc = llvm_functions.get(&name).unwrap().0;
                 function.build(llfunc, &llvm_functions, &self.ctxt);
-                LLVMVerifyFunction(llfunc, LLVMAbortProcessAction);
                 if opt {
+                    LLVMVerifyFunction(llfunc, LLVMAbortProcessAction);
                     LLVMRunFunctionPassManager(optimizer, llfunc);
                 }
             }
 
+            if print_llir {
+                LLVMDumpModule(module);
+            }
+
             if let Some(f) = llvm_functions.get("main") {
-                Self::run(main_output.unwrap(), module, *f, print_llir)
+                Self::run(main_output.unwrap(), module, f.0)
             }
         }
     }
 
-    unsafe fn run(ty: Type, module: LLVMModuleRef, function: LLVMValueRef,
-            print_llir: bool) {
+    unsafe fn run(ty: Type, module: LLVMModuleRef, function: LLVMValueRef) {
         use llvm_sys::analysis::*;
         use llvm_sys::execution_engine::*;
         use llvm_sys::target::*;
         use std::io::Write;
-
-        if print_llir {
-            LLVMDumpModule(module);
-        }
 
         let mut error: *mut ::libc::c_char = std::mem::uninitialized();
         LLVMVerifyModule(module,
@@ -1164,12 +1186,13 @@ impl<'t> std::fmt::Display for Statement<'t> {
     }
 }
 
-impl std::fmt::Display for Lvalue {
+impl<'t> std::fmt::Display for Lvalue<'t> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
         match *self {
             Lvalue::Return => write!(f, "return"),
             Lvalue::Temporary(ref tmp) => write!(f, "tmp{}", tmp.0),
             Lvalue::Variable(ref var) => write!(f, "var{}", var.0),
+            Lvalue::Deref(ref ptr) => write!(f, "(*{})", ptr),
         }
     }
 }

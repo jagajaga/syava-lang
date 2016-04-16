@@ -42,7 +42,7 @@ pub enum ExprKind<'t> {
     UnitLiteral,
     Return(Box<Expr<'t>>),
     Assign {
-        dst: String,
+        dst: Box<Expr<'t>>,
         src: Box<Expr<'t>>
     },
 }
@@ -162,11 +162,11 @@ impl<'t> Expr<'t> {
         }
     }
 
-    pub fn assign(dst: String, src: Expr<'t>, ctxt: &'t TypeContext<'t>)
+    pub fn assign(dst: Expr<'t>, src: Expr<'t>, ctxt: &'t TypeContext<'t>)
             -> Self {
         Expr {
             kind: ExprKind::Assign {
-                dst: dst,
+                dst: Box::new(dst),
                 src: Box::new(src),
             },
             ty: Type::unit(ctxt),
@@ -507,28 +507,45 @@ impl<'t> Expr<'t> {
                    uf, variables, function, functions)
             }
             ExprKind::Assign {
-                ref dst,
+                ref mut dst,
                 ref mut src,
             } => {
                 debug_assert!(self.ty == Type::unit(ctxt));
-                if let Some(&ty) = variables.get(dst) {
-                    try!(src.unify_type(ctxt, ty,
-                        uf, variables, function, functions));
-                    uf.unify(self.ty, to_unify).map_err(|()|
-                        AstError::CouldNotUnify {
-                            first: Type::unit(ctxt),
-                            second: to_unify,
-                            function: function.name.clone(),
-                            compiler: fl!(),
+                match dst.kind {
+                    ExprKind::Variable(ref name) => {
+                        if let Some(&ty) = variables.get(name) {
+                            try!(src.unify_type(ctxt, ty,
+                                uf, variables, function, functions));
+                        } else {
+                            return Err(AstError::UndefinedVariableName {
+                                name: name.clone(),
+                                function: function.name.clone(),
+                                compiler: fl!(),
+                            })
                         }
-                    )
-                } else {
-                    Err(AstError::UndefinedVariableName {
-                        name: dst.clone(),
+                    }
+                    ExprKind::Deref(ref mut dst) => {
+                        let mut inner_ty = Type::infer(ctxt);
+                        inner_ty.generate_inference_id(uf, ctxt);
+                        try!(dst.unify_type(ctxt, Type::ref_(inner_ty, ctxt),
+                            uf, variables, function, functions));
+                        try!(src.unify_type(ctxt, inner_ty,
+                            uf, variables, function, functions));
+                    }
+                    _ => return Err(AstError::NotAnLvalue {
+                        expr: format!("{:?}", dst),
                         function: function.name.clone(),
                         compiler: fl!(),
                     })
                 }
+                uf.unify(self.ty, Type::unit(ctxt)).map_err(|()|
+                    AstError::CouldNotUnify {
+                        first: Type::unit(ctxt),
+                        second: to_unify,
+                        function: function.name.clone(),
+                        compiler: fl!(),
+                    }
+                )
             }
         }
     }
@@ -954,18 +971,35 @@ impl<'t> Expr<'t> {
                 dst,
                 src,
             } => {
-                let var = if let Some(var) = locals.get(&dst) {
-                    *var
-                } else if let Some(&(num, _)) = function.args.get(&dst) {
-                    function.raw.get_param(num as u32)
-                } else {
-                    panic!("ICE: unknown variable: {}", dst)
-                };
-                let (value, mut blk) =
+                let (value, blk) =
                     src.translate(function, block, locals, fn_types, ctxt);
-                if let Some(ref mut blk) = blk {
-                    blk.write_to_var(var, value, &mut function.raw)
-                }
+                let blk = if let Some(mut blk) = blk {
+                    match dst.kind {
+                        ExprKind::Variable(name) => {
+                            let var = if let Some(var) = locals.get(&name) {
+                                *var
+                            } else if let Some(&(num, _)) =
+                                    function.args.get(&name) {
+                                function.raw.get_param(num as u32)
+                            } else {
+                                panic!("ICE: unknown variable: {}", name)
+                            };
+                            blk.write_to_var(var, value, &mut function.raw);
+                            Some(blk)
+                        }
+                        ExprKind::Deref(inner) => {
+                            let (ptr, mut blk) =
+                                inner.translate(function, blk, locals,
+                                    fn_types, ctxt);
+                            if let Some(ref mut blk) = blk {
+                                blk.write_to_ptr(ptr, value,
+                                    &mut function.raw, fn_types, ctxt);
+                            }
+                            blk
+                        }
+                        e => panic!("ICE: unsupported lvalue: {:?}", e),
+                    }
+                } else { None };
                 (mir::Value::const_unit(), blk)
             }
             ExprKind::Block(body) => {

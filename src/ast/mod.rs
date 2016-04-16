@@ -107,6 +107,11 @@ pub enum AstError<'t> {
         function: String,
         compiler: (&'static str, u32),
     },
+    NotAnLvalue {
+        expr: String,
+        function: String,
+        compiler: (&'static str, u32),
+    }
     /*
     BinopUnsupported {
         op: parse::Operand,

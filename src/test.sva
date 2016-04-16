@@ -1,7 +1,9 @@
 fn main() -> u32 {
-    deref(&0)
+    let x = 1;
+    write_to(&x);
+    x
 }
 
-fn deref(x: &u32) -> u32 {
-    **&x + 1
+fn write_to(x: &u32) {
+    *x = 0;
 }
