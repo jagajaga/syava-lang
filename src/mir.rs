@@ -524,7 +524,7 @@ impl<'t> Value<'t> {
                 Type::ref_(inner.ty(function, ctxt), ctxt),
             ValueKind::Deref(ref inner) => {
                 if let TypeVariant::Reference(inner) =
-                        *inner.ty(function, ctxt).variant {
+                        *inner.ty(function, ctxt).0 {
                     inner
                 } else {
                     panic!("Deref of a non-ref type: {:?}", inner)
@@ -576,7 +576,7 @@ impl<'t> Value<'t> {
             ValueKind::Pos(inner) => {
                 let ty = inner.ty(&function.mir, ctxt);
                 let llinner = inner.to_llvm(function, ctxt);
-                match *ty.variant {
+                match *ty.0 {
                     TypeVariant::SInt(_) | TypeVariant::UInt(_) => llinner,
                     _ => panic!("ICE: {} can't be used in unary +", ty),
                 }
@@ -585,7 +585,7 @@ impl<'t> Value<'t> {
                 // TODO: check types
                 let ty = inner.ty(&function.mir, ctxt);
                 let llinner = inner.to_llvm(function, ctxt);
-                match *ty.variant {
+                match *ty.0 {
                     TypeVariant::SInt(_) =>
                         LLVMBuildNeg(function.builder, llinner, cstr!("")),
                     _ => panic!("ICE: {} can't be used in unary -", ty),
@@ -594,7 +594,7 @@ impl<'t> Value<'t> {
             ValueKind::Not(inner) => {
                 let ty = inner.ty(&function.mir, ctxt);
                 let llinner = inner.to_llvm(function, ctxt);
-                match *ty.variant {
+                match *ty.0 {
                     TypeVariant::SInt(_) | TypeVariant::UInt(_)
                     | TypeVariant::Bool =>
                         LLVMBuildNot(function.builder, llinner, cstr!("")),
@@ -618,7 +618,7 @@ impl<'t> Value<'t> {
                 let ty = lhs.ty(&function.mir, ctxt);
                 let lhs = lhs.to_llvm(function, ctxt);
                 let rhs = rhs.to_llvm(function, ctxt);
-                match *ty.variant {
+                match *ty.0 {
                     TypeVariant::SInt(_) | TypeVariant::UInt(_) =>
                         LLVMBuildAdd(function.builder, lhs, rhs, cstr!("")),
                     _ => panic!("ICE: {} can't be used in binary +", ty),
@@ -628,7 +628,7 @@ impl<'t> Value<'t> {
                 let ty = lhs.ty(&function.mir, ctxt);
                 let lhs = lhs.to_llvm(function, ctxt);
                 let rhs = rhs.to_llvm(function, ctxt);
-                match *ty.variant {
+                match *ty.0 {
                     TypeVariant::SInt(_) | TypeVariant::UInt(_) =>
                         LLVMBuildSub(function.builder, lhs, rhs, cstr!("")),
                     _ => panic!("ICE: {} can't be used in binary -", ty),
@@ -638,7 +638,7 @@ impl<'t> Value<'t> {
                 let ty = lhs.ty(&function.mir, ctxt);
                 let lhs = lhs.to_llvm(function, ctxt);
                 let rhs = rhs.to_llvm(function, ctxt);
-                match *ty.variant {
+                match *ty.0 {
                     TypeVariant::SInt(_) | TypeVariant::UInt(_) =>
                         LLVMBuildMul(function.builder, lhs, rhs, cstr!("")),
                     _ => panic!("ICE: {} can't be used in binary *", ty),
@@ -648,7 +648,7 @@ impl<'t> Value<'t> {
                 let ty = lhs.ty(&function.mir, ctxt);
                 let lhs = lhs.to_llvm(function, ctxt);
                 let rhs = rhs.to_llvm(function, ctxt);
-                match *ty.variant {
+                match *ty.0 {
                     TypeVariant::SInt(_) =>
                         LLVMBuildSDiv(function.builder, lhs, rhs, cstr!("")),
                     TypeVariant::UInt(_) =>
@@ -660,7 +660,7 @@ impl<'t> Value<'t> {
                 let ty = lhs.ty(&function.mir, ctxt);
                 let lhs = lhs.to_llvm(function, ctxt);
                 let rhs = rhs.to_llvm(function, ctxt);
-                match *ty.variant {
+                match *ty.0 {
                     TypeVariant::SInt(_) =>
                         LLVMBuildSRem(function.builder, lhs, rhs, cstr!("")),
                     TypeVariant::UInt(_) =>
@@ -672,7 +672,7 @@ impl<'t> Value<'t> {
                 let ty = lhs.ty(&function.mir, ctxt);
                 let lhs = lhs.to_llvm(function, ctxt);
                 let rhs = rhs.to_llvm(function, ctxt);
-                match *ty.variant {
+                match *ty.0 {
                     TypeVariant::SInt(_) | TypeVariant::UInt(_)
                     | TypeVariant::Bool =>
                         LLVMBuildAnd(function.builder, lhs, rhs, cstr!("")),
@@ -683,7 +683,7 @@ impl<'t> Value<'t> {
                 let ty = lhs.ty(&function.mir, ctxt);
                 let lhs = lhs.to_llvm(function, ctxt);
                 let rhs = rhs.to_llvm(function, ctxt);
-                match *ty.variant {
+                match *ty.0 {
                     TypeVariant::SInt(_) | TypeVariant::UInt(_)
                     | TypeVariant::Bool =>
                         LLVMBuildXor(function.builder, lhs, rhs, cstr!("")),
@@ -694,7 +694,7 @@ impl<'t> Value<'t> {
                 let ty = lhs.ty(&function.mir, ctxt);
                 let lhs = lhs.to_llvm(function, ctxt);
                 let rhs = rhs.to_llvm(function, ctxt);
-                match *ty.variant {
+                match *ty.0 {
                     TypeVariant::SInt(_) | TypeVariant::UInt(_)
                     | TypeVariant::Bool =>
                         LLVMBuildOr(function.builder, lhs, rhs, cstr!("")),
@@ -705,7 +705,7 @@ impl<'t> Value<'t> {
                 let ty = lhs.ty(&function.mir, ctxt);
                 let lhs = lhs.to_llvm(function, ctxt);
                 let rhs = rhs.to_llvm(function, ctxt);
-                match *ty.variant {
+                match *ty.0 {
                     TypeVariant::SInt(_) | TypeVariant::UInt(_) =>
                         LLVMBuildShl(function.builder, lhs, rhs, cstr!("")),
                     _ => panic!("ICE: {} can't be used in binary %", ty),
@@ -715,7 +715,7 @@ impl<'t> Value<'t> {
                 let ty = lhs.ty(&function.mir, ctxt);
                 let lhs = lhs.to_llvm(function, ctxt);
                 let rhs = rhs.to_llvm(function, ctxt);
-                match *ty.variant {
+                match *ty.0 {
                     TypeVariant::SInt(_) =>
                         LLVMBuildAShr(function.builder, lhs, rhs, cstr!("")),
                     TypeVariant::UInt(_) =>
@@ -727,7 +727,7 @@ impl<'t> Value<'t> {
                 let ty = lhs.ty(&function.mir, ctxt);
                 let lhs = lhs.to_llvm(function, ctxt);
                 let rhs = rhs.to_llvm(function, ctxt);
-                match *ty.variant {
+                match *ty.0 {
                     TypeVariant::SInt(_) | TypeVariant::UInt(_)
                     | TypeVariant::Bool =>
                         LLVMBuildICmp(function.builder, LLVMIntEQ,
@@ -739,7 +739,7 @@ impl<'t> Value<'t> {
                 let ty = lhs.ty(&function.mir, ctxt);
                 let lhs = lhs.to_llvm(function, ctxt);
                 let rhs = rhs.to_llvm(function, ctxt);
-                match *ty.variant {
+                match *ty.0 {
                     TypeVariant::SInt(_) | TypeVariant::UInt(_)
                     | TypeVariant::Bool =>
                         LLVMBuildICmp(function.builder, LLVMIntNE,
@@ -751,7 +751,7 @@ impl<'t> Value<'t> {
                 let ty = lhs.ty(&function.mir, ctxt);
                 let lhs = lhs.to_llvm(function, ctxt);
                 let rhs = rhs.to_llvm(function, ctxt);
-                match *ty.variant {
+                match *ty.0 {
                     TypeVariant::SInt(_) =>
                         LLVMBuildICmp(function.builder, LLVMIntSLT,
                             lhs, rhs, cstr!("")),
@@ -765,7 +765,7 @@ impl<'t> Value<'t> {
                 let ty = lhs.ty(&function.mir, ctxt);
                 let lhs = lhs.to_llvm(function, ctxt);
                 let rhs = rhs.to_llvm(function, ctxt);
-                match *ty.variant {
+                match *ty.0 {
                     TypeVariant::SInt(_) =>
                         LLVMBuildICmp(function.builder, LLVMIntSLE,
                             lhs, rhs, cstr!("")),
@@ -779,7 +779,7 @@ impl<'t> Value<'t> {
                 let ty = lhs.ty(&function.mir, ctxt);
                 let lhs = lhs.to_llvm(function, ctxt);
                 let rhs = rhs.to_llvm(function, ctxt);
-                match *ty.variant {
+                match *ty.0 {
                     TypeVariant::SInt(_) =>
                         LLVMBuildICmp(function.builder, LLVMIntSGT,
                             lhs, rhs, cstr!("")),
@@ -793,7 +793,7 @@ impl<'t> Value<'t> {
                 let ty = lhs.ty(&function.mir, ctxt);
                 let lhs = lhs.to_llvm(function, ctxt);
                 let rhs = rhs.to_llvm(function, ctxt);
-                match *ty.variant {
+                match *ty.0 {
                     TypeVariant::SInt(_) =>
                         LLVMBuildICmp(function.builder, LLVMIntSGE,
                             lhs, rhs, cstr!("")),
@@ -813,8 +813,8 @@ impl<'t> Value<'t> {
                 let llret = LLVMBuildCall(function.builder, callee,
                     args.as_mut_ptr(), args.len() as u32, cstr!(""));
 
-                if *output.variant == TypeVariant::Unit ||
-                        *output.variant == TypeVariant::Diverging {
+                if *output.0 == TypeVariant::Unit ||
+                        *output.0 == TypeVariant::Diverging {
                     LLVMConstStruct([].as_mut_ptr(), 0, false as LLVMBool)
                 } else {
                     llret
@@ -880,7 +880,7 @@ impl<'t> Terminator<'t> {
                     function.get_block(&mut else_blk));
             }
             Terminator::Return => {
-                match *function.mir.ty.output().variant {
+                match *function.mir.ty.output().0 {
                     TypeVariant::Unit => {
                         LLVMBuildRetVoid(function.builder);
                     },
@@ -919,7 +919,7 @@ impl Block {
             fn_types: &HashMap<String, ty::Function<'t>>,
             ctxt: &'t TypeContext<'t>) {
         let leaf = function.get_leaf(ptr, self, fn_types, ctxt);
-        if let TypeVariant::Reference(_) = *leaf.ty(function, ctxt).variant {
+        if let TypeVariant::Reference(_) = *leaf.ty(function, ctxt).0 {
         } else {
             panic!("writing to a not-pointer: {}", leaf.ty(function, ctxt))
         }
@@ -1192,7 +1192,7 @@ impl<'t> std::fmt::Display for Const<'t> {
                 ref ty,
                 ref value,
             } => {
-                match *ty.variant {
+                match *ty.0 {
                     TypeVariant::SInt(_) => write!(f, "{}", *value as i64),
                     TypeVariant::UInt(_) => write!(f, "{}", *value as u64),
                     _ => panic!("Non-integer int"),
