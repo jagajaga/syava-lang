@@ -1,4 +1,5 @@
 use std;
+use libc;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use llvm_sys::prelude::*;
@@ -1046,12 +1047,11 @@ impl<'t> Mir<'t> {
         self.functions.insert(name, func);
     }
 
-    pub fn build(self, print_llir: bool, opt: bool) {
+    pub fn build(self, output: &str, print_llir: bool, opt: bool) {
         use llvm_sys::transforms::scalar::*;
         use llvm_sys::analysis::*;
         use llvm_sys::analysis::LLVMVerifierFailureAction::*;
         unsafe {
-            let mut main_output = None;
             let mut llvm_functions = HashMap::new();
             let module = LLVMModuleCreateWithName(cstr!(""));
 
@@ -1068,9 +1068,6 @@ impl<'t> Mir<'t> {
             LLVMInitializeFunctionPassManager(optimizer);
 
             for (name, function) in &self.functions {
-                if name == "main" {
-                    main_output = Some(function.ty.output());
-                }
                 let llfunc = LLVMAddFunction(module,
                     CString::new(name.clone()).unwrap().as_ptr(),
                     function.ty.to_llvm());
@@ -1091,15 +1088,14 @@ impl<'t> Mir<'t> {
                 LLVMDumpModule(module);
             }
 
-            if let Some(f) = llvm_functions.get("main") {
-                Self::run(main_output.unwrap(), module, f.0)
-            }
+            Self::write_to_object_file(opt, module, output)
         }
     }
 
-    unsafe fn run(ty: Type, module: LLVMModuleRef, function: LLVMValueRef) {
+    unsafe fn write_to_object_file(opt: bool, module: LLVMModuleRef,
+            output: &str) {
         use llvm_sys::analysis::*;
-        use llvm_sys::execution_engine::*;
+        use llvm_sys::target_machine::*;
         use llvm_sys::target::*;
         use std::io::Write;
 
@@ -1108,40 +1104,32 @@ impl<'t> Mir<'t> {
             LLVMVerifierFailureAction::LLVMAbortProcessAction, &mut error);
         LLVMDisposeMessage(error);
 
-        println!("--- RUNNING ---");
-        let mut engine: LLVMExecutionEngineRef = std::mem::uninitialized();
-        error = std::ptr::null_mut();
-        LLVMLinkInMCJIT();
-        LLVM_InitializeNativeTarget();
-        LLVM_InitializeNativeAsmPrinter();
-        if LLVMCreateJITCompilerForModule(&mut engine, module,
-                0, &mut error) != 0 {
-            writeln!(std::io::stderr(),
-                "failed to create execution engine: {:?}",
+        assert!(LLVM_InitializeNativeTarget() == 0);
+        assert!(LLVM_InitializeNativeAsmPrinter() == 0);
+        let triple = LLVMGetDefaultTargetTriple();
+        let mut target = std::mem::uninitialized();
+        assert!(LLVMGetTargetFromTriple(triple, &mut target,
+            std::ptr::null_mut()) == 0);
+
+        let opt_level = if opt {
+            LLVMCodeGenOptLevel::LLVMCodeGenLevelAggressive
+        } else {
+            LLVMCodeGenOptLevel::LLVMCodeGenLevelNone
+        };
+        let target_machine = LLVMCreateTargetMachine(target, triple, cstr!(""),
+            cstr!(""), opt_level, LLVMRelocMode::LLVMRelocDefault,
+            LLVMCodeModel::LLVMCodeModelDefault);
+
+        let output = CString::new(output.to_owned()).unwrap();
+        if LLVMTargetMachineEmitToFile(target_machine, module,
+                output.as_ptr() as *mut libc::c_char,
+                LLVMCodeGenFileType::LLVMObjectFile, &mut error) != 0 {
+            writeln!(std::io::stderr(), "Failed to write to output file: {:?}",
                 CStr::from_ptr(error)).unwrap();
             LLVMDisposeMessage(error);
             std::process::exit(-1);
         }
-
-        let res = LLVMRunFunction(engine, function, 0, std::ptr::null_mut());
-        match *ty.variant {
-            TypeVariant::SInt(ty::Int::I32) => {
-                let val = LLVMGenericValueToInt(res, true as LLVMBool);
-                println!("{}", val as i32);
-            }
-            TypeVariant::UInt(ty::Int::I32) => {
-                let val = LLVMGenericValueToInt(res, true as LLVMBool);
-                println!("{}", val as u32);
-            }
-            TypeVariant::Unit => {}
-            _ => {
-                println!("Pink does not yet support printing the \
-                    {} return type", ty);
-            }
-        }
-
-        LLVMDisposeGenericValue(res);
-        LLVMDisposeExecutionEngine(engine);
+        LLVMDisposeTargetMachine(target_machine);
     }
 }
 
