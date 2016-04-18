@@ -378,9 +378,21 @@ impl<'t> Expr<'t> {
                     | Operand::Xor | Operand::Or => {
                         let ty = self.ty;
                         try!(lhs.unify_type(ctxt, self.ty,
-                            uf, variables, function, functions));
-                        try!(rhs.unify_type(ctxt, lhs.ty,
-                            uf, variables, function, functions));
+                                uf, variables, function, functions));
+                        match rhs.unify_type(ctxt, lhs.ty,
+                                uf, variables, function, functions) {
+                            Err(AstError::CouldNotUnify {
+                                first, second, function, ..
+                            }) => return Err(AstError::BinopUnsupported {
+                                    op: op,
+                                    lhs: second,
+                                    rhs: first,
+                                    function: function,
+                                    compiler: fl!(),
+                                }),
+                            Err(e) => return Err(e),
+                            Ok(()) => {},
+                        }
                         uf.unify(self.ty, to_unify).map_err(|()|
                             AstError::CouldNotUnify {
                                 first: ty,
@@ -399,8 +411,20 @@ impl<'t> Expr<'t> {
                         rhs.ty.generate_inference_id(uf, ctxt);
                         try!(lhs.unify_type(ctxt, rhs.ty,
                             uf, variables, function, functions));
-                        try!(rhs.unify_type(ctxt, lhs.ty,
-                            uf, variables, function, functions));
+                        match rhs.unify_type(ctxt, lhs.ty,
+                                uf, variables, function, functions) {
+                            Err(AstError::CouldNotUnify {
+                                first, second, function, ..
+                            }) => return Err(AstError::BinopUnsupported {
+                                    op: op,
+                                    lhs: second,
+                                    rhs: first,
+                                    function: function,
+                                    compiler: fl!(),
+                                }),
+                            Err(e) => return Err(e),
+                            Ok(()) => {},
+                        }
                         uf.unify(self.ty, to_unify).map_err(|()|
                             AstError::CouldNotUnify {
                                 first: Type::bool(ctxt),
@@ -412,11 +436,35 @@ impl<'t> Expr<'t> {
                     }
 
                     Operand::AndAnd | Operand::OrOr => {
-                        self.ty = Type::bool(ctxt);
-                        try!(lhs.unify_type(ctxt, Type::bool(ctxt),
-                            uf, variables, function, functions));
-                        try!(rhs.unify_type(ctxt, Type::bool(ctxt),
-                            uf, variables, function, functions));
+                        rhs.ty.generate_inference_id(uf, ctxt);
+                        match lhs.unify_type(ctxt, rhs.ty,
+                                uf, variables, function, functions) {
+                            Err(AstError::CouldNotUnify {
+                                first, second, function, ..
+                            }) => return Err(AstError::BinopUnsupported {
+                                    op: op,
+                                    lhs: first,
+                                    rhs: second,
+                                    function: function,
+                                    compiler: fl!(),
+                                }),
+                            Err(e) => return Err(e),
+                            Ok(()) => {},
+                        }
+                        match rhs.unify_type(ctxt, Type::bool(ctxt),
+                                uf, variables, function, functions) {
+                            Err(AstError::CouldNotUnify {
+                                first, function, ..
+                            }) => return Err(AstError::BinopUnsupported {
+                                    op: op,
+                                    lhs: lhs.ty,
+                                    rhs: first,
+                                    function: function,
+                                    compiler: fl!(),
+                                }),
+                            Err(e) => return Err(e),
+                            Ok(()) => {},
+                        }
 
                         uf.unify(self.ty, to_unify).map_err(|()|
                             AstError::CouldNotUnify {
@@ -445,6 +493,7 @@ impl<'t> Expr<'t> {
                                 expected: f.input().len(),
                                 callee: callee.clone(),
                                 caller: function.name.clone(),
+                                compiler: fl!(),
                             })
                         }
 
@@ -464,7 +513,10 @@ impl<'t> Expr<'t> {
                         )
                     }
                     None => return Err(
-                        AstError::FunctionDoesntExist(callee.clone()))
+                        AstError::FunctionDoesntExist {
+                            function: callee.clone(),
+                            compiler: fl!(),
+                        })
                 }
             }
             ExprKind::If {

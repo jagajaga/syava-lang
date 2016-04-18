@@ -63,6 +63,25 @@ impl<'t> Ast<'t> {
                 &mut uf, &mut vars, func, &self.function_types));
             try!(Expr::finalize_block_ty(body, &mut uf, func, &self.ctxt));
         }
+        if let Some(&(ref f, _)) = self.functions.get("main") {
+            if *f.ret_ty.0 != ty::TypeVariant::SInt(ty::Int::I32) ||
+                    f.args.len() != 0 {
+                let mut input = Vec::new();
+                for (_, &(_, ty)) in &f.args {
+                    input.push(ty);
+                }
+                return Err(AstError::IncorrectMainType {
+                    input: input,
+                    output: f.ret_ty,
+                    compiler: fl!(),
+                })
+            }
+        } else {
+            return Err(AstError::FunctionDoesntExist {
+                function: "main".to_owned(),
+                compiler: fl!(),
+            })
+        }
         let mut mir = mir::Mir::new(self.ctxt, opt);
         let functions = std::mem::replace(&mut self.functions, HashMap::new());
         for (name, (func, body)) in functions {
@@ -80,14 +99,22 @@ pub enum AstError<'t> {
         expected: usize,
         callee: String,
         caller: String,
-        //compiler: (&'static str, u32),
+        compiler: (&'static str, u32),
     },
     UndefinedVariableName {
         name: String,
         function: String,
         compiler: (&'static str, u32),
     },
-    FunctionDoesntExist(String),
+    FunctionDoesntExist {
+        function: String,
+        compiler: (&'static str, u32),
+    },
+    IncorrectMainType {
+        input: Vec<Type<'t>>,
+        output: Type<'t>,
+        compiler: (&'static str, u32),
+    },
     UnopUnsupported {
         op: parse::Operand,
         inner: Type<'t>,
@@ -112,14 +139,14 @@ pub enum AstError<'t> {
         expr: String,
         function: String,
         compiler: (&'static str, u32),
-    }
-    /*
+    },
     BinopUnsupported {
         op: parse::Operand,
-        lhs: Ty,
-        rhs: Ty,
+        lhs: Type<'t>,
+        rhs: Type<'t>,
+        function: String,
+        compiler: (&'static str, u32),
     },
-    */
 }
 
 #[derive(Debug)]
