@@ -18,7 +18,7 @@ pub enum Stmt<'t> {
 pub enum ExprKind<'t> {
     Call {
         callee: String,
-        args: Vec<Expr<'t>>
+        args: Vec<Expr<'t>>,
     },
     If {
         condition: Box<Expr<'t>>,
@@ -43,7 +43,7 @@ pub enum ExprKind<'t> {
     Return(Box<Expr<'t>>),
     Assign {
         dst: Box<Expr<'t>>,
-        src: Box<Expr<'t>>
+        src: Box<Expr<'t>>,
     },
 }
 
@@ -55,8 +55,7 @@ pub struct Expr<'t> {
 
 // constructors
 impl<'t> Expr<'t> {
-    pub fn call(callee: String, args: Vec<Expr<'t>>,
-            ctxt: &'t TypeContext<'t>) -> Self {
+    pub fn call(callee: String, args: Vec<Expr<'t>>, ctxt: &'t TypeContext<'t>) -> Self {
         Expr {
             kind: ExprKind::Call {
                 callee: callee,
@@ -73,8 +72,11 @@ impl<'t> Expr<'t> {
         }
     }
 
-    pub fn if_else(cond: Expr<'t>, then: Block<'t>, else_: Block<'t>,
-            ctxt: &'t TypeContext<'t>) -> Self {
+    pub fn if_else(cond: Expr<'t>,
+                   then: Block<'t>,
+                   else_: Block<'t>,
+                   ctxt: &'t TypeContext<'t>)
+                   -> Self {
         Expr {
             kind: ExprKind::If {
                 condition: Box::new(cond),
@@ -162,8 +164,7 @@ impl<'t> Expr<'t> {
         }
     }
 
-    pub fn assign(dst: Expr<'t>, src: Expr<'t>, ctxt: &'t TypeContext<'t>)
-            -> Self {
+    pub fn assign(dst: Expr<'t>, src: Expr<'t>, ctxt: &'t TypeContext<'t>) -> Self {
         Expr {
             kind: ExprKind::Assign {
                 dst: Box::new(dst),
@@ -178,12 +179,20 @@ impl<'t> Expr<'t> {
 impl<'t> Expr<'t> {
     pub fn is_block(&self) -> bool {
         match self.kind {
-            ExprKind::If {..} | ExprKind::Block(_) => true,
-            ExprKind::Call {..} | ExprKind::Binop {..} | ExprKind::Pos(_)
-            | ExprKind::Neg(_) | ExprKind::Not(_) | ExprKind::Variable(_)
-            | ExprKind::Ref(_) | ExprKind::Deref(_) | ExprKind::IntLiteral(_)
-            | ExprKind::BoolLiteral(_) | ExprKind::UnitLiteral
-            | ExprKind::Return(_) | ExprKind::Assign {..} => false,
+            ExprKind::If { .. } | ExprKind::Block(_) => true,
+            ExprKind::Call { .. } |
+            ExprKind::Binop { .. } |
+            ExprKind::Pos(_) |
+            ExprKind::Neg(_) |
+            ExprKind::Not(_) |
+            ExprKind::Variable(_) |
+            ExprKind::Ref(_) |
+            ExprKind::Deref(_) |
+            ExprKind::IntLiteral(_) |
+            ExprKind::BoolLiteral(_) |
+            ExprKind::UnitLiteral |
+            ExprKind::Return(_) |
+            ExprKind::Assign { .. } => false,
         }
     }
 }
@@ -191,105 +200,104 @@ impl<'t> Expr<'t> {
 // typechecking
 impl<'t> Expr<'t> {
     pub fn typeck_block(block: &mut Block<'t>,
-            ctxt: &'t TypeContext<'t>,
-            to_unify: Type<'t>, uf: &mut ty::UnionFind<'t>,
-            variables: &mut HashMap<String, Type<'t>>,
-            function: &Function<'t>,
-            functions: &HashMap<String, ty::Function<'t>>)
-            -> Result<(), AstError<'t>> {
+                        ctxt: &'t TypeContext<'t>,
+                        to_unify: Type<'t>,
+                        uf: &mut ty::UnionFind<'t>,
+                        variables: &mut HashMap<String, Type<'t>>,
+                        function: &Function<'t>,
+                        functions: &HashMap<String, ty::Function<'t>>)
+                        -> Result<(), AstError<'t>> {
         let mut live_blk = true;
         for stmt in block.stmts.iter_mut() {
             match *stmt {
-                Stmt::Let {
-                    ref name,
-                    ref mut ty,
-                    ref mut value,
-                } => {
+                Stmt::Let { ref name, ref mut ty, ref mut value } => {
                     ty.generate_inference_id(uf, ctxt);
                     if let Some(ref mut v) = *value {
-                        try!(v.unify_type(
-                            ctxt, *ty, uf, variables, function, functions));
+                        try!(v.unify_type(ctxt, *ty, uf, variables, function, functions));
                     }
                     variables.insert(name.to_owned(), *ty);
                 }
-                Stmt::Expr(ref mut e @ Expr {
-                    kind: ExprKind::Return(_),
-                    ..
-                }) => {
-                    try!(e.unify_type(ctxt, Type::diverging(ctxt),
-                        uf, variables, function, functions));
+                Stmt::Expr(ref mut e @ Expr { kind: ExprKind::Return(_), .. }) => {
+                    try!(e.unify_type(ctxt,
+                                      Type::diverging(ctxt),
+                                      uf,
+                                      variables,
+                                      function,
+                                      functions));
                     live_blk = false;
                     break;
                 }
                 Stmt::Expr(ref mut e) => {
                     let mut ty = Type::infer(ctxt);
                     ty.generate_inference_id(uf, ctxt);
-                    try!(e.unify_type(ctxt, ty, uf, variables,
-                        function, functions));
+                    try!(e.unify_type(ctxt, ty, uf, variables, function, functions));
                 }
             }
         }
         if live_blk {
             match block.expr {
                 Some(ref mut expr) => {
-                    try!(expr.unify_type(ctxt, to_unify,
-                        uf, variables, function, functions))
-                },
+                    try!(expr.unify_type(ctxt, to_unify, uf, variables, function, functions))
+                }
                 None => {
                     try!(uf.unify(to_unify, Type::unit(ctxt))
-                        .map_err(|()| AstError::CouldNotUnify {
-                            first: Type::unit(ctxt),
-                            second: to_unify,
-                            function: function.name.clone(),
-                            compiler: fl!(),
-                        }
-                    ))
-                },
+                           .map_err(|()| {
+                               AstError::CouldNotUnify {
+                                   first: Type::unit(ctxt),
+                                   second: to_unify,
+                                   function: function.name.clone(),
+                                   compiler: fl!(),
+                               }
+                           }))
+                }
             };
         }
         Ok(())
     }
 
-    pub fn unify_type(&mut self, ctxt: &'t TypeContext<'t>,
-            to_unify: Type<'t>, uf: &mut ty::UnionFind<'t>,
-            variables: &mut HashMap<String, Type<'t>>,
-            function: &Function<'t>,
-            functions: &HashMap<String, ty::Function<'t>>)
-            -> Result<(), AstError<'t>> {
+    pub fn unify_type(&mut self,
+                      ctxt: &'t TypeContext<'t>,
+                      to_unify: Type<'t>,
+                      uf: &mut ty::UnionFind<'t>,
+                      variables: &mut HashMap<String, Type<'t>>,
+                      function: &Function<'t>,
+                      functions: &HashMap<String, ty::Function<'t>>)
+                      -> Result<(), AstError<'t>> {
         self.ty.generate_inference_id(uf, ctxt);
         match self.kind {
-            ExprKind::IntLiteral(_) | ExprKind::BoolLiteral(_)
-            | ExprKind::UnitLiteral => {
-                uf.unify(self.ty, to_unify).map_err(|()|
+            ExprKind::IntLiteral(_) |
+            ExprKind::BoolLiteral(_) |
+            ExprKind::UnitLiteral => {
+                uf.unify(self.ty, to_unify).map_err(|()| {
                     AstError::CouldNotUnify {
                         first: self.ty,
                         second: to_unify,
                         function: function.name.clone(),
                         compiler: fl!(),
                     }
-                )
+                })
             }
             ExprKind::Variable(ref name) => {
                 if let Some(ty) = variables.get(name) {
                     self.ty = *ty;
-                    uf.unify(*ty, to_unify).map_err(|()|
+                    uf.unify(*ty, to_unify).map_err(|()| {
                         AstError::CouldNotUnify {
                             first: *ty,
                             second: to_unify,
                             function: function.name.clone(),
                             compiler: fl!(),
                         }
-                    )
+                    })
                 } else if let Some(&(_, ty)) = function.args.get(name) {
                     self.ty = ty;
-                    uf.unify(ty, to_unify).map_err(|()|
+                    uf.unify(ty, to_unify).map_err(|()| {
                         AstError::CouldNotUnify {
                             first: ty,
                             second: to_unify,
                             function: function.name.clone(),
                             compiler: fl!(),
                         }
-                    )
+                    })
                 } else {
                     Err(AstError::UndefinedVariableName {
                         name: name.clone(),
@@ -298,193 +306,193 @@ impl<'t> Expr<'t> {
                     })
                 }
             }
-            ExprKind::Pos(ref mut inner) | ExprKind::Neg(ref mut inner)
-            | ExprKind::Not(ref mut inner) => {
-                try!(inner.unify_type(ctxt, to_unify,
-                        uf, variables, function, functions));
+            ExprKind::Pos(ref mut inner) |
+            ExprKind::Neg(ref mut inner) |
+            ExprKind::Not(ref mut inner) => {
+                try!(inner.unify_type(ctxt, to_unify, uf, variables, function, functions));
                 let self_ty = self.ty;
                 let inner_ty = inner.ty;
-                uf.unify(self.ty, inner.ty).map_err(|()|
+                uf.unify(self.ty, inner.ty).map_err(|()| {
                     AstError::CouldNotUnify {
                         first: self_ty,
                         second: inner_ty,
                         function: function.name.clone(),
                         compiler: fl!(),
                     }
-                )
+                })
             }
             ExprKind::Ref(ref mut inner) => {
                 let mut inner_ty = Type::infer(ctxt);
                 inner_ty.generate_inference_id(uf, ctxt);
-                try!(inner.unify_type(ctxt, inner_ty,
-                    uf, variables, function, functions));
+                try!(inner.unify_type(ctxt, inner_ty, uf, variables, function, functions));
                 let ref_ty = Type::ref_(inner_ty, ctxt);
-                try!(uf.unify(to_unify, ref_ty).map_err(|()|
+                try!(uf.unify(to_unify, ref_ty).map_err(|()| {
                     AstError::CouldNotUnify {
                         first: to_unify,
                         second: inner.ty,
                         function: function.name.clone(),
                         compiler: fl!(),
+                    }
                 }));
-                try!(uf.unify(to_unify, ref_ty).map_err(|()|
+                try!(uf.unify(to_unify, ref_ty).map_err(|()| {
                     AstError::CouldNotUnify {
                         first: to_unify,
                         second: ref_ty,
                         function: function.name.clone(),
                         compiler: fl!(),
+                    }
                 }));
                 let self_ty = self.ty;
-                uf.unify(self.ty, ref_ty).map_err(|()|
+                uf.unify(self.ty, ref_ty).map_err(|()| {
                     AstError::CouldNotUnify {
                         first: self_ty,
                         second: ref_ty,
                         function: function.name.clone(),
                         compiler: fl!(),
+                    }
                 })
             }
             ExprKind::Deref(ref mut inner) => {
                 let mut outer_ty = Type::infer(ctxt);
                 outer_ty.generate_inference_id(uf, ctxt);
                 let self_ty = self.ty;
-                try!(uf.unify(self.ty, outer_ty).map_err(|()|
+                try!(uf.unify(self.ty, outer_ty).map_err(|()| {
                     AstError::CouldNotUnify {
                         first: self_ty,
                         second: outer_ty,
                         function: function.name.clone(),
                         compiler: fl!(),
+                    }
                 }));
-                try!(uf.unify(to_unify, outer_ty).map_err(|()|
+                try!(uf.unify(to_unify, outer_ty).map_err(|()| {
                     AstError::CouldNotUnify {
                         first: to_unify,
                         second: outer_ty,
                         function: function.name.clone(),
                         compiler: fl!(),
+                    }
                 }));
 
                 let inner_ty = Type::ref_(outer_ty, ctxt);
-                inner.unify_type(ctxt, inner_ty,
-                    uf, variables, function, functions)
+                inner.unify_type(ctxt, inner_ty, uf, variables, function, functions)
             }
-            ExprKind::Binop {
-                op,
-                ref mut lhs,
-                ref mut rhs,
-            } => {
+            ExprKind::Binop { op, ref mut lhs, ref mut rhs } => {
                 match op {
-                    Operand::Mul | Operand::Div
-                    | Operand::Rem | Operand::Plus
-                    | Operand::Minus | Operand::Shl
-                    | Operand::Shr | Operand::And
-                    | Operand::Xor | Operand::Or => {
+                    Operand::Mul |
+                    Operand::Div |
+                    Operand::Rem |
+                    Operand::Plus |
+                    Operand::Minus |
+                    Operand::Shl |
+                    Operand::Shr |
+                    Operand::And |
+                    Operand::Xor |
+                    Operand::Or => {
                         let ty = self.ty;
-                        try!(lhs.unify_type(ctxt, self.ty,
-                                uf, variables, function, functions));
-                        match rhs.unify_type(ctxt, lhs.ty,
-                                uf, variables, function, functions) {
-                            Err(AstError::CouldNotUnify {
-                                first, second, function, ..
-                            }) => return Err(AstError::BinopUnsupported {
+                        try!(lhs.unify_type(ctxt, self.ty, uf, variables, function, functions));
+                        match rhs.unify_type(ctxt, lhs.ty, uf, variables, function, functions) {
+                            Err(AstError::CouldNotUnify { first, second, function, .. }) => {
+                                return Err(AstError::BinopUnsupported {
                                     op: op,
                                     lhs: second,
                                     rhs: first,
                                     function: function,
                                     compiler: fl!(),
-                                }),
+                                })
+                            }
                             Err(e) => return Err(e),
-                            Ok(()) => {},
+                            Ok(()) => {}
                         }
-                        uf.unify(self.ty, to_unify).map_err(|()|
+                        uf.unify(self.ty, to_unify).map_err(|()| {
                             AstError::CouldNotUnify {
                                 first: ty,
                                 second: to_unify,
                                 function: function.name.clone(),
                                 compiler: fl!(),
                             }
-                        )
+                        })
                     }
 
-                    Operand::EqualsEquals | Operand::NotEquals
-                    | Operand::LessThan | Operand::LessThanEquals
-                    | Operand::GreaterThan
-                    | Operand::GreaterThanEquals => {
+                    Operand::EqualsEquals |
+                    Operand::NotEquals |
+                    Operand::LessThan |
+                    Operand::LessThanEquals |
+                    Operand::GreaterThan |
+                    Operand::GreaterThanEquals => {
                         self.ty = Type::bool(ctxt);
                         rhs.ty.generate_inference_id(uf, ctxt);
-                        try!(lhs.unify_type(ctxt, rhs.ty,
-                            uf, variables, function, functions));
-                        match rhs.unify_type(ctxt, lhs.ty,
-                                uf, variables, function, functions) {
-                            Err(AstError::CouldNotUnify {
-                                first, second, function, ..
-                            }) => return Err(AstError::BinopUnsupported {
+                        try!(lhs.unify_type(ctxt, rhs.ty, uf, variables, function, functions));
+                        match rhs.unify_type(ctxt, lhs.ty, uf, variables, function, functions) {
+                            Err(AstError::CouldNotUnify { first, second, function, .. }) => {
+                                return Err(AstError::BinopUnsupported {
                                     op: op,
                                     lhs: second,
                                     rhs: first,
                                     function: function,
                                     compiler: fl!(),
-                                }),
+                                })
+                            }
                             Err(e) => return Err(e),
-                            Ok(()) => {},
+                            Ok(()) => {}
                         }
-                        uf.unify(self.ty, to_unify).map_err(|()|
+                        uf.unify(self.ty, to_unify).map_err(|()| {
                             AstError::CouldNotUnify {
                                 first: Type::bool(ctxt),
                                 second: to_unify,
                                 function: function.name.clone(),
                                 compiler: fl!(),
                             }
-                        )
+                        })
                     }
 
                     Operand::AndAnd | Operand::OrOr => {
                         rhs.ty.generate_inference_id(uf, ctxt);
-                        match lhs.unify_type(ctxt, rhs.ty,
-                                uf, variables, function, functions) {
-                            Err(AstError::CouldNotUnify {
-                                first, second, function, ..
-                            }) => return Err(AstError::BinopUnsupported {
+                        match lhs.unify_type(ctxt, rhs.ty, uf, variables, function, functions) {
+                            Err(AstError::CouldNotUnify { first, second, function, .. }) => {
+                                return Err(AstError::BinopUnsupported {
                                     op: op,
                                     lhs: first,
                                     rhs: second,
                                     function: function,
                                     compiler: fl!(),
-                                }),
+                                })
+                            }
                             Err(e) => return Err(e),
-                            Ok(()) => {},
+                            Ok(()) => {}
                         }
-                        match rhs.unify_type(ctxt, Type::bool(ctxt),
-                                uf, variables, function, functions) {
-                            Err(AstError::CouldNotUnify {
-                                first, function, ..
-                            }) => return Err(AstError::BinopUnsupported {
+                        match rhs.unify_type(ctxt,
+                                             Type::bool(ctxt),
+                                             uf,
+                                             variables,
+                                             function,
+                                             functions) {
+                            Err(AstError::CouldNotUnify { first, function, .. }) => {
+                                return Err(AstError::BinopUnsupported {
                                     op: op,
                                     lhs: lhs.ty,
                                     rhs: first,
                                     function: function,
                                     compiler: fl!(),
-                                }),
+                                })
+                            }
                             Err(e) => return Err(e),
-                            Ok(()) => {},
+                            Ok(()) => {}
                         }
 
-                        uf.unify(self.ty, to_unify).map_err(|()|
+                        uf.unify(self.ty, to_unify).map_err(|()| {
                             AstError::CouldNotUnify {
                                 first: to_unify,
                                 second: Type::bool(ctxt),
                                 function: function.name.clone(),
                                 compiler: fl!(),
                             }
-                        )
+                        })
                     }
 
-                    Operand::Not => {
-                        panic!("ICE: Not (`!`) is not a binop")
-                    }
+                    Operand::Not => panic!("ICE: Not (`!`) is not a binop"),
                 }
             }
-            ExprKind::Call {
-                ref callee,
-                ref mut args,
-            } => {
+            ExprKind::Call { ref callee, ref mut args } => {
                 match functions.get(callee) {
                     Some(f) => {
                         if f.input().len() != args.len() {
@@ -494,118 +502,133 @@ impl<'t> Expr<'t> {
                                 callee: callee.clone(),
                                 caller: function.name.clone(),
                                 compiler: fl!(),
-                            })
+                            });
                         }
 
                         self.ty = f.output();
                         for (arg_ty, expr) in f.input().iter().zip(args) {
-                            try!(expr.unify_type(ctxt, *arg_ty,
-                                uf, variables, function, functions));
+                            try!(expr.unify_type(ctxt,
+                                                 *arg_ty,
+                                                 uf,
+                                                 variables,
+                                                 function,
+                                                 functions));
                         }
                         let ty = self.ty;
-                        uf.unify(self.ty, to_unify).map_err(|()|
+                        uf.unify(self.ty, to_unify).map_err(|()| {
                             AstError::CouldNotUnify {
                                 first: ty,
                                 second: to_unify,
                                 function: function.name.clone(),
                                 compiler: fl!(),
                             }
-                        )
+                        })
                     }
-                    None => return Err(
-                        AstError::FunctionDoesntExist {
+                    None => {
+                        return Err(AstError::FunctionDoesntExist {
                             function: callee.clone(),
                             compiler: fl!(),
                         })
+                    }
                 }
             }
-            ExprKind::If {
-                ref mut condition,
-                ref mut then_value,
-                ref mut else_value,
-            } => {
-                try!(condition.unify_type(ctxt, Type::bool(ctxt),
-                    uf, variables, function, functions));
-                try!(Self::typeck_block(then_value, ctxt,
-                    to_unify, uf, variables, function, functions));
-                try!(Self::typeck_block(else_value, ctxt,
-                    to_unify, uf, variables, function, functions));
+            ExprKind::If { ref mut condition, ref mut then_value, ref mut else_value } => {
+                try!(condition.unify_type(ctxt,
+                                          Type::bool(ctxt),
+                                          uf,
+                                          variables,
+                                          function,
+                                          functions));
+                try!(Self::typeck_block(then_value,
+                                        ctxt,
+                                        to_unify,
+                                        uf,
+                                        variables,
+                                        function,
+                                        functions));
+                try!(Self::typeck_block(else_value,
+                                        ctxt,
+                                        to_unify,
+                                        uf,
+                                        variables,
+                                        function,
+                                        functions));
                 let ty = self.ty;
-                uf.unify(self.ty, to_unify).map_err(|()|
+                uf.unify(self.ty, to_unify).map_err(|()| {
                     AstError::CouldNotUnify {
                         first: ty,
                         second: to_unify,
                         function: function.name.clone(),
                         compiler: fl!(),
                     }
-                )
+                })
             }
             ExprKind::Block(ref mut blk) => {
-                try!(Self::typeck_block(blk, ctxt,
-                    to_unify, uf, variables, function, functions));
+                try!(Self::typeck_block(blk, ctxt, to_unify, uf, variables, function, functions));
                 let ty = self.ty;
-                uf.unify(self.ty, to_unify).map_err(|()|
+                uf.unify(self.ty, to_unify).map_err(|()| {
                     AstError::CouldNotUnify {
                         first: ty,
                         second: to_unify,
                         function: function.name.clone(),
                         compiler: fl!(),
                     }
-                )
+                })
             }
             ExprKind::Return(ref mut ret) => {
                 self.ty = Type::diverging(ctxt);
-                ret.unify_type(ctxt, function.ret_ty,
-                   uf, variables, function, functions)
+                ret.unify_type(ctxt, function.ret_ty, uf, variables, function, functions)
             }
-            ExprKind::Assign {
-                ref mut dst,
-                ref mut src,
-            } => {
+            ExprKind::Assign { ref mut dst, ref mut src } => {
                 debug_assert!(self.ty == Type::unit(ctxt));
                 match dst.kind {
                     ExprKind::Variable(ref name) => {
                         if let Some(&ty) = variables.get(name) {
-                            try!(src.unify_type(ctxt, ty,
-                                uf, variables, function, functions));
+                            try!(src.unify_type(ctxt, ty, uf, variables, function, functions));
                         } else {
                             return Err(AstError::UndefinedVariableName {
                                 name: name.clone(),
                                 function: function.name.clone(),
                                 compiler: fl!(),
-                            })
+                            });
                         }
                     }
                     ExprKind::Deref(ref mut dst) => {
                         let mut inner_ty = Type::infer(ctxt);
                         inner_ty.generate_inference_id(uf, ctxt);
-                        try!(dst.unify_type(ctxt, Type::ref_(inner_ty, ctxt),
-                            uf, variables, function, functions));
-                        try!(src.unify_type(ctxt, inner_ty,
-                            uf, variables, function, functions));
+                        try!(dst.unify_type(ctxt,
+                                            Type::ref_(inner_ty, ctxt),
+                                            uf,
+                                            variables,
+                                            function,
+                                            functions));
+                        try!(src.unify_type(ctxt, inner_ty, uf, variables, function, functions));
                     }
-                    _ => return Err(AstError::NotAnLvalue {
-                        expr: format!("{:?}", dst),
-                        function: function.name.clone(),
-                        compiler: fl!(),
-                    })
+                    _ => {
+                        return Err(AstError::NotAnLvalue {
+                            expr: format!("{:?}", dst),
+                            function: function.name.clone(),
+                            compiler: fl!(),
+                        })
+                    }
                 }
-                uf.unify(self.ty, Type::unit(ctxt)).map_err(|()|
+                uf.unify(self.ty, Type::unit(ctxt)).map_err(|()| {
                     AstError::CouldNotUnify {
                         first: Type::unit(ctxt),
                         second: to_unify,
                         function: function.name.clone(),
                         compiler: fl!(),
                     }
-                )
+                })
             }
         }
     }
 
     pub fn finalize_block_ty(block: &mut Block<'t>,
-            uf: &mut ty::UnionFind<'t>, function: &Function<'t>,
-            ctxt: &'t TypeContext<'t>)
-            -> Result<(), AstError<'t>> {
+                             uf: &mut ty::UnionFind<'t>,
+                             function: &Function<'t>,
+                             ctxt: &'t TypeContext<'t>)
+                             -> Result<(), AstError<'t>> {
         let mut live_blk = true;
 
         for stmt in block.stmts.iter_mut() {
@@ -616,24 +639,18 @@ impl<'t> Expr<'t> {
                 });
             }
             match *stmt {
-                Stmt::Let {
-                    ref mut ty,
-                    ref mut value,
-                    ..
-                } => {
-                    try!(ty.finalize(uf, ctxt).map_err(|()|
+                Stmt::Let { ref mut ty, ref mut value, .. } => {
+                    try!(ty.finalize(uf, ctxt).map_err(|()| {
                         AstError::NoActualType {
                             compiler: fl!(),
                             function: function.name.clone(),
-                        }));
+                        }
+                    }));
                     if let Some(ref mut v) = *value {
                         try!(v.finalize_type(uf, function, ctxt));
                     }
                 }
-                Stmt::Expr(ref mut e @ Expr {
-                    kind: ExprKind::Return(_),
-                    ..
-                }) => {
+                Stmt::Expr(ref mut e @ Expr { kind: ExprKind::Return(_), .. }) => {
                     try!(e.finalize_type(uf, function, ctxt));
                     live_blk = false;
                 }
@@ -655,21 +672,23 @@ impl<'t> Expr<'t> {
         Ok(())
     }
 
-    pub fn finalize_type(&mut self, uf: &mut ty::UnionFind<'t>,
-            function: &Function<'t>, ctxt: &'t TypeContext<'t>)
-            -> Result<(), AstError<'t>> {
-        try!(self.ty.finalize(uf, ctxt).map_err(|()|
-           AstError::NoActualType {
+    pub fn finalize_type(&mut self,
+                         uf: &mut ty::UnionFind<'t>,
+                         function: &Function<'t>,
+                         ctxt: &'t TypeContext<'t>)
+                         -> Result<(), AstError<'t>> {
+        try!(self.ty.finalize(uf, ctxt).map_err(|()| {
+            AstError::NoActualType {
                 compiler: fl!(),
                 function: function.name.clone(),
             }
-        ));
+        }));
 
         match self.kind {
-            ExprKind::IntLiteral(_) | ExprKind::BoolLiteral(_)
-            | ExprKind::UnitLiteral | ExprKind::Variable(_) => {
-                Ok(())
-            }
+            ExprKind::IntLiteral(_) |
+            ExprKind::BoolLiteral(_) |
+            ExprKind::UnitLiteral |
+            ExprKind::Variable(_) => Ok(()),
             ExprKind::Pos(ref mut inner) => {
                 try!(inner.finalize_type(uf, function, ctxt));
                 assert!(self.ty == inner.ty);
@@ -704,8 +723,9 @@ impl<'t> Expr<'t> {
                 try!(inner.finalize_type(uf, function, ctxt));
                 assert!(self.ty == inner.ty);
                 match *self.ty.0 {
-                    TypeVariant::SInt(_) | TypeVariant::UInt(_)
-                    | TypeVariant::Bool => Ok(()),
+                    TypeVariant::SInt(_) |
+                    TypeVariant::UInt(_) |
+                    TypeVariant::Bool => Ok(()),
                     _ => {
                         Err(AstError::UnopUnsupported {
                             op: Operand::Not,
@@ -719,52 +739,40 @@ impl<'t> Expr<'t> {
             ExprKind::Ref(ref mut inner) => {
                 try!(inner.finalize_type(uf, function, ctxt));
                 assert!(self.ty == Type::ref_(inner.ty, ctxt),
-                    "self: {:?}, inner: &{:?}", self.ty, inner.ty);
+                        "self: {:?}, inner: &{:?}",
+                        self.ty,
+                        inner.ty);
                 Ok(())
             }
             ExprKind::Deref(ref mut inner) => {
                 try!(inner.finalize_type(uf, function, ctxt));
                 assert!(Type::ref_(self.ty, ctxt) == inner.ty,
-                    "self: {:?}, inner: *{:?}", self.ty, inner.ty);
+                        "self: {:?}, inner: *{:?}",
+                        self.ty,
+                        inner.ty);
                 Ok(())
             }
-            ExprKind::Binop {
-                ref mut lhs,
-                ref mut rhs,
-                ..
-            } => {
+            ExprKind::Binop { ref mut lhs, ref mut rhs, .. } => {
                 try!(lhs.finalize_type(uf, function, ctxt));
                 rhs.finalize_type(uf, function, ctxt)
             }
-            ExprKind::Call {
-                ref mut args,
-                ..
-            } => {
+            ExprKind::Call { ref mut args, .. } => {
                 for arg in args {
                     try!(arg.finalize_type(uf, function, ctxt));
                 }
                 Ok(())
             }
-            ExprKind::If {
-                ref mut condition,
-                ref mut then_value,
-                ref mut else_value,
-            } => {
+            ExprKind::If { ref mut condition, ref mut then_value, ref mut else_value } => {
                 try!(condition.finalize_type(uf, function, ctxt));
                 try!(Self::finalize_block_ty(then_value, uf, function, ctxt));
                 Self::finalize_block_ty(else_value, uf, function, ctxt)
             }
-            ExprKind::Block(ref mut blk) => {
-                Self::finalize_block_ty(blk, uf, function, ctxt)
-            }
+            ExprKind::Block(ref mut blk) => Self::finalize_block_ty(blk, uf, function, ctxt),
             ExprKind::Return(ref mut ret) => {
                 assert!(*self.ty.0 == TypeVariant::Diverging);
                 ret.finalize_type(uf, function, ctxt)
             }
-            ExprKind::Assign {
-                ref mut src,
-                ..
-            } => {
+            ExprKind::Assign { ref mut src, .. } => {
                 assert!(*self.ty.0 == TypeVariant::Unit);
                 src.finalize_type(uf, function, ctxt)
             }
@@ -774,88 +782,74 @@ impl<'t> Expr<'t> {
 
 // into mir
 impl<'t> Expr<'t> {
-    pub fn translate(self, mir: &mir::Mir<'t>, function: &mut Function<'t>,
-            mut block: mir::Block, locals: &mut HashMap<String, mir::Variable>,
-            fn_types: &HashMap<String, ty::Function<'t>>)
-            -> (mir::Value<'t>, Option<mir::Block>) {
+    pub fn translate(self,
+                     mir: &mir::Mir<'t>,
+                     function: &mut Function<'t>,
+                     mut block: mir::Block,
+                     locals: &mut HashMap<String, mir::Variable>,
+                     fn_types: &HashMap<String, ty::Function<'t>>)
+                     -> (mir::Value<'t>, Option<mir::Block>) {
         assert!(self.ty.is_final_type(), "not final type: {:?}", self);
         match self.kind {
-            ExprKind::IntLiteral(n) => {
-                (mir::Value::const_int(n, self.ty), Some(block))
-            }
-            ExprKind::BoolLiteral(b) => {
-                (mir::Value::const_bool(b), Some(block))
-            }
-            ExprKind::UnitLiteral => {
-                (mir::Value::const_unit(), Some(block))
-            }
+            ExprKind::IntLiteral(n) => (mir::Value::const_int(n, self.ty), Some(block)),
+            ExprKind::BoolLiteral(b) => (mir::Value::const_bool(b), Some(block)),
+            ExprKind::UnitLiteral => (mir::Value::const_unit(), Some(block)),
             ExprKind::Variable(name) => {
                 if let Some(var) = locals.get(&name) {
                     (mir::Value::local(*var), Some(block))
                 } else if let Some(&(num, _)) = function.args.get(&name) {
                     (mir::Value::param(num as u32, &mut function.raw),
-                        Some(block))
+                     Some(block))
                 } else {
                     panic!("ICE: unknown variable: {}", name)
                 }
             }
             ExprKind::Pos(e) => {
-                let (inner, blk) =
-                    e.translate(mir, function, block, locals, fn_types);
+                let (inner, blk) = e.translate(mir, function, block, locals, fn_types);
                 if let Some(mut blk) = blk {
-                    (mir::Value::pos(inner, mir, &mut function.raw, &mut blk,
-                        fn_types), Some(blk))
+                    (mir::Value::pos(inner, mir, &mut function.raw, &mut blk, fn_types),
+                     Some(blk))
                 } else {
                     (mir::Value::const_unit(), None)
                 }
             }
             ExprKind::Neg(e) => {
-                let (inner, blk) =
-                    e.translate(mir, function, block, locals, fn_types);
+                let (inner, blk) = e.translate(mir, function, block, locals, fn_types);
                 if let Some(mut blk) = blk {
-                    (mir::Value::neg(inner, mir, &mut function.raw, &mut blk,
-                        fn_types), Some(blk))
+                    (mir::Value::neg(inner, mir, &mut function.raw, &mut blk, fn_types),
+                     Some(blk))
                 } else {
                     (mir::Value::const_unit(), None)
                 }
             }
             ExprKind::Not(e) => {
-                let (inner, blk) =
-                    e.translate(mir, function, block, locals, fn_types);
+                let (inner, blk) = e.translate(mir, function, block, locals, fn_types);
                 if let Some(mut blk) = blk {
-                    (mir::Value::not(inner, mir, &mut function.raw, &mut blk,
-                        fn_types), Some(blk))
+                    (mir::Value::not(inner, mir, &mut function.raw, &mut blk, fn_types),
+                     Some(blk))
                 } else {
                     (mir::Value::const_unit(), None)
                 }
             }
             ExprKind::Ref(e) => {
-                let (inner, blk) =
-                    e.translate(mir, function, block, locals, fn_types);
+                let (inner, blk) = e.translate(mir, function, block, locals, fn_types);
                 if let Some(mut blk) = blk {
-                    (mir::Value::ref_(inner, mir, &mut function.raw, &mut blk,
-                        fn_types),
-                    Some(blk))
+                    (mir::Value::ref_(inner, mir, &mut function.raw, &mut blk, fn_types),
+                     Some(blk))
                 } else {
                     (mir::Value::const_unit(), None)
                 }
             }
             ExprKind::Deref(e) => {
-                let (inner, blk) =
-                    e.translate(mir, function, block, locals, fn_types);
+                let (inner, blk) = e.translate(mir, function, block, locals, fn_types);
                 if let Some(mut blk) = blk {
-                    (mir::Value::deref(inner, mir, &mut function.raw, &mut blk,
-                        fn_types),
-                    Some(blk))
+                    (mir::Value::deref(inner, mir, &mut function.raw, &mut blk, fn_types),
+                     Some(blk))
                 } else {
                     (mir::Value::const_unit(), None)
                 }
             }
-            ExprKind::Binop {
-                op: Operand::AndAnd,
-                lhs,
-                rhs,
-            } => {
+            ExprKind::Binop { op: Operand::AndAnd, lhs, rhs } => {
                 let then = Block::expr(Expr::bool_lit(false, mir.ty_ctxt()));
                 Expr {
                     kind: ExprKind::If {
@@ -864,13 +858,10 @@ impl<'t> Expr<'t> {
                         else_value: Box::new(Block::expr(*rhs)),
                     },
                     ty: self.ty,
-                }.translate(mir, function, block, locals, fn_types)
+                }
+                .translate(mir, function, block, locals, fn_types)
             }
-            ExprKind::Binop {
-                op: Operand::OrOr,
-                lhs,
-                rhs,
-            } => {
+            ExprKind::Binop { op: Operand::OrOr, lhs, rhs } => {
                 let then = Block::expr(Expr::bool_lit(true, mir.ty_ctxt()));
                 Expr {
                     kind: ExprKind::If {
@@ -879,16 +870,12 @@ impl<'t> Expr<'t> {
                         else_value: Box::new(Block::expr(*rhs)),
                     },
                     ty: self.ty,
-                }.translate(mir, function, block, locals, fn_types)
+                }
+                .translate(mir, function, block, locals, fn_types)
             }
-            ExprKind::Binop {
-                op,
-                lhs,
-                rhs,
-            } => {
+            ExprKind::Binop { op, lhs, rhs } => {
                 let (lhs, blk) = {
-                    let (lhs, blk) =
-                        lhs.translate(mir, function, block, locals, fn_types);
+                    let (lhs, blk) = lhs.translate(mir, function, block, locals, fn_types);
                     if let Some(blk) = blk {
                         (lhs, blk)
                     } else {
@@ -896,8 +883,7 @@ impl<'t> Expr<'t> {
                     }
                 };
                 let (rhs, mut blk) = {
-                    let (rhs, blk) =
-                        rhs.translate(mir, function, blk, locals, fn_types);
+                    let (rhs, blk) = rhs.translate(mir, function, blk, locals, fn_types);
                     if let Some(blk) = blk {
                         (rhs, blk)
                     } else {
@@ -905,72 +891,69 @@ impl<'t> Expr<'t> {
                     }
                 };
                 (match op {
-                    Operand::Plus =>
-                        mir::Value::add(lhs, rhs, mir,
-                            &mut function.raw, &mut blk, fn_types),
-                    Operand::Minus =>
-                        mir::Value::sub(lhs, rhs, mir,
-                            &mut function.raw, &mut blk, fn_types),
+                    Operand::Plus => {
+                        mir::Value::add(lhs, rhs, mir, &mut function.raw, &mut blk, fn_types)
+                    }
+                    Operand::Minus => {
+                        mir::Value::sub(lhs, rhs, mir, &mut function.raw, &mut blk, fn_types)
+                    }
 
-                    Operand::Mul =>
-                        mir::Value::mul(lhs, rhs, mir,
-                            &mut function.raw, &mut blk, fn_types),
-                    Operand::Div =>
-                        mir::Value::div(lhs, rhs, mir,
-                            &mut function.raw, &mut blk, fn_types),
-                    Operand::Rem =>
-                        mir::Value::rem(lhs, rhs, mir,
-                            &mut function.raw, &mut blk, fn_types),
+                    Operand::Mul => {
+                        mir::Value::mul(lhs, rhs, mir, &mut function.raw, &mut blk, fn_types)
+                    }
+                    Operand::Div => {
+                        mir::Value::div(lhs, rhs, mir, &mut function.raw, &mut blk, fn_types)
+                    }
+                    Operand::Rem => {
+                        mir::Value::rem(lhs, rhs, mir, &mut function.raw, &mut blk, fn_types)
+                    }
 
-                    Operand::And =>
-                        mir::Value::and(lhs, rhs, mir,
-                            &mut function.raw, &mut blk, fn_types),
-                    Operand::Xor =>
-                        mir::Value::xor(lhs, rhs, mir,
-                            &mut function.raw, &mut blk, fn_types),
-                    Operand::Or =>
-                        mir::Value::or(lhs, rhs, mir,
-                            &mut function.raw, &mut blk, fn_types),
+                    Operand::And => {
+                        mir::Value::and(lhs, rhs, mir, &mut function.raw, &mut blk, fn_types)
+                    }
+                    Operand::Xor => {
+                        mir::Value::xor(lhs, rhs, mir, &mut function.raw, &mut blk, fn_types)
+                    }
+                    Operand::Or => {
+                        mir::Value::or(lhs, rhs, mir, &mut function.raw, &mut blk, fn_types)
+                    }
 
-                    Operand::Shl =>
-                        mir::Value::shl(lhs, rhs, mir,
-                            &mut function.raw, &mut blk, fn_types),
-                    Operand::Shr =>
-                        mir::Value::shr(lhs, rhs, mir,
-                            &mut function.raw, &mut blk, fn_types),
+                    Operand::Shl => {
+                        mir::Value::shl(lhs, rhs, mir, &mut function.raw, &mut blk, fn_types)
+                    }
+                    Operand::Shr => {
+                        mir::Value::shr(lhs, rhs, mir, &mut function.raw, &mut blk, fn_types)
+                    }
 
-                    Operand::EqualsEquals =>
-                        mir::Value::eq(lhs, rhs, mir,
-                            &mut function.raw, &mut blk, fn_types),
-                    Operand::NotEquals =>
-                        mir::Value::neq(lhs, rhs, mir,
-                            &mut function.raw, &mut blk, fn_types),
-                    Operand::LessThan =>
-                        mir::Value::lt(lhs, rhs, mir,
-                            &mut function.raw, &mut blk, fn_types),
-                    Operand::LessThanEquals =>
-                        mir::Value::lte(lhs, rhs, mir,
-                            &mut function.raw, &mut blk, fn_types),
-                    Operand::GreaterThan =>
-                        mir::Value::gt(lhs, rhs, mir,
-                            &mut function.raw, &mut blk, fn_types),
-                    Operand::GreaterThanEquals =>
-                        mir::Value::gte(lhs, rhs, mir,
-                            &mut function.raw, &mut blk, fn_types),
+                    Operand::EqualsEquals => {
+                        mir::Value::eq(lhs, rhs, mir, &mut function.raw, &mut blk, fn_types)
+                    }
+                    Operand::NotEquals => {
+                        mir::Value::neq(lhs, rhs, mir, &mut function.raw, &mut blk, fn_types)
+                    }
+                    Operand::LessThan => {
+                        mir::Value::lt(lhs, rhs, mir, &mut function.raw, &mut blk, fn_types)
+                    }
+                    Operand::LessThanEquals => {
+                        mir::Value::lte(lhs, rhs, mir, &mut function.raw, &mut blk, fn_types)
+                    }
+                    Operand::GreaterThan => {
+                        mir::Value::gt(lhs, rhs, mir, &mut function.raw, &mut blk, fn_types)
+                    }
+                    Operand::GreaterThanEquals => {
+                        mir::Value::gte(lhs, rhs, mir, &mut function.raw, &mut blk, fn_types)
+                    }
 
                     Operand::AndAnd => unreachable!(),
                     Operand::OrOr => unreachable!(),
                     Operand::Not => panic!("ICE: Not (`!`) is not a binop"),
-                }, Some(blk))
+                },
+                 Some(blk))
             }
-            ExprKind::Call {
-                callee,
-                args,
-            } => {
+            ExprKind::Call { callee, args } => {
                 let mut mir_args = Vec::new();
                 for arg in args {
-                    let (arg, blk) = arg.translate(mir, function, block, locals,
-                        fn_types);
+                    let (arg, blk) = arg.translate(mir, function, block, locals, fn_types);
                     if let Some(blk) = blk {
                         block = blk;
                     } else {
@@ -978,58 +961,58 @@ impl<'t> Expr<'t> {
                     }
                     mir_args.push(arg);
                 }
-                (mir::Value::call(callee, mir_args, mir,
-                    &mut function.raw, &mut block, fn_types),
-                Some(block))
+                (mir::Value::call(callee,
+                                  mir_args,
+                                  mir,
+                                  &mut function.raw,
+                                  &mut block,
+                                  fn_types),
+                 Some(block))
             }
-            ExprKind::If {
-                condition,
-                then_value,
-                else_value,
-            } => {
-                let (cond, blk) = condition.translate(mir, function, block,
-                    locals, fn_types);
+            ExprKind::If { condition, then_value, else_value } => {
+                let (cond, blk) = condition.translate(mir, function, block, locals, fn_types);
                 let (then_blk, else_blk, join, res) = if let Some(blk) = blk {
-                    blk.if_else(self.ty, cond,
-                        mir, &mut function.raw, fn_types)
+                    blk.if_else(self.ty, cond, mir, &mut function.raw, fn_types)
                 } else {
                     return (mir::Value::const_unit(), None);
                 };
 
-                let (expr, then_blk) = Self::translate_block(*then_value, mir,
-                    function, then_blk, locals, fn_types);
+                let (expr, then_blk) = Self::translate_block(*then_value,
+                                                             mir,
+                                                             function,
+                                                             then_blk,
+                                                             locals,
+                                                             fn_types);
                 if let Some(then_blk) = then_blk {
                     then_blk.finish(&mut function.raw, expr);
                 }
 
-                let (expr, else_blk) = Self::translate_block(*else_value, mir,
-                    function, else_blk, locals, fn_types);
+                let (expr, else_blk) = Self::translate_block(*else_value,
+                                                             mir,
+                                                             function,
+                                                             else_blk,
+                                                             locals,
+                                                             fn_types);
                 if let Some(else_blk) = else_blk {
                     else_blk.finish(&mut function.raw, expr);
                 }
                 (res, Some(join))
             }
             ExprKind::Return(ret) => {
-                let (value, block) = ret.translate(mir, function, block, locals,
-                    fn_types);
+                let (value, block) = ret.translate(mir, function, block, locals, fn_types);
                 if let Some(block) = block {
                     block.early_ret(&mut function.raw, value);
                 }
                 (mir::Value::const_unit(), None)
             }
-            ExprKind::Assign {
-                dst,
-                src,
-            } => {
-                let (value, blk) =
-                    src.translate(mir, function, block, locals, fn_types);
+            ExprKind::Assign { dst, src } => {
+                let (value, blk) = src.translate(mir, function, block, locals, fn_types);
                 let blk = if let Some(mut blk) = blk {
                     match dst.kind {
                         ExprKind::Variable(name) => {
                             let var = if let Some(var) = locals.get(&name) {
                                 *var
-                            } else if let Some(&(num, _)) =
-                                    function.args.get(&name) {
+                            } else if let Some(&(num, _)) = function.args.get(&name) {
                                 function.raw.get_param(num as u32)
                             } else {
                                 panic!("ICE: unknown variable: {}", name)
@@ -1038,50 +1021,51 @@ impl<'t> Expr<'t> {
                             Some(blk)
                         }
                         ExprKind::Deref(inner) => {
-                            let (ptr, mut blk) =
-                                inner.translate(mir, function, blk, locals,
-                                    fn_types);
+                            let (ptr, mut blk) = inner.translate(mir,
+                                                                 function,
+                                                                 blk,
+                                                                 locals,
+                                                                 fn_types);
                             if let Some(ref mut blk) = blk {
-                                blk.write_to_ptr(ptr, value,
-                                    mir, &mut function.raw, fn_types);
+                                blk.write_to_ptr(ptr, value, mir, &mut function.raw, fn_types);
                             }
                             blk
                         }
                         e => panic!("ICE: unsupported lvalue: {:?}", e),
                     }
-                } else { None };
+                } else {
+                    None
+                };
                 (mir::Value::const_unit(), blk)
             }
             ExprKind::Block(body) => {
-                Self::translate_block(*body, mir, function, block, locals,
-                    fn_types)
+                Self::translate_block(*body, mir, function, block, locals, fn_types)
             }
         }
     }
 
-    pub fn translate_block(body: Block<'t>, mir: &mir::Mir<'t>,
-            function: &mut Function<'t>, block: mir::Block,
-            locals: &mut HashMap<String, mir::Variable>,
-            fn_types: &HashMap<String, ty::Function<'t>>)
-            -> (mir::Value<'t>, Option<mir::Block>) {
+    pub fn translate_block(body: Block<'t>,
+                           mir: &mir::Mir<'t>,
+                           function: &mut Function<'t>,
+                           block: mir::Block,
+                           locals: &mut HashMap<String, mir::Variable>,
+                           fn_types: &HashMap<String, ty::Function<'t>>)
+                           -> (mir::Value<'t>, Option<mir::Block>) {
         let mut block = Some(block);
         for stmt in body.stmts {
             if let Some(blk) = block.take() {
                 match stmt {
-                    Stmt::Let {
-                        name,
-                        ty,
-                        value,
-                    } => {
+                    Stmt::Let { name, ty, value } => {
                         let var = function.raw.new_local(ty);
                         locals.insert(name, var);
                         if let Some(value) = value {
-                            let (value, blk) =
-                                value.translate(mir, function, blk,
-                                    locals, fn_types);
+                            let (value, blk) = value.translate(mir,
+                                                               function,
+                                                               blk,
+                                                               locals,
+                                                               fn_types);
                             if let Some(mut blk) = blk {
-                                blk.write_to_var(var, value,
-                                    &mut function.raw);
+                                blk.write_to_var(var, value, &mut function.raw);
                                 block = Some(blk);
                             }
                         } else {
@@ -1089,11 +1073,9 @@ impl<'t> Expr<'t> {
                         }
                     }
                     Stmt::Expr(e) => {
-                        let (value, blk) = e.translate(mir, function, blk,
-                            locals, fn_types);
+                        let (value, blk) = e.translate(mir, function, blk, locals, fn_types);
                         if let Some(mut blk) = blk {
-                            blk.write_to_tmp(value,
-                                mir, &mut function.raw, fn_types);
+                            blk.write_to_tmp(value, mir, &mut function.raw, fn_types);
                             block = Some(blk);
                         }
                     }

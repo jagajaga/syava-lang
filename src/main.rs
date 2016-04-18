@@ -42,16 +42,18 @@ fn main() {
         let mut ap = ArgumentParser::new();
         ap.set_description("The syavac compiler for the syava language.\n\
             Written in Rust.");
-        ap.refer(&mut name).required().add_argument("name", Store,
-            "The file to compile");
-        ap.refer(&mut output).add_option(&["-o", "--output"], StoreOption,
-            "The file to output to");
-        ap.refer(&mut print_mir).add_option(&["--print-mir"], StoreTrue,
-            "Pass if you would like to print the generated MIR");
-        ap.refer(&mut print_llir).add_option(&["--print-llir"], StoreTrue,
-            "Pass if you would like to print the generated LLVM IR");
-        ap.refer(&mut opt).add_option(&["--opt", "-O"], StoreTrue,
-            "Pass if you would like to optimize the generated LLVM IR");
+        ap.refer(&mut name).required().add_argument("name", Store, "The file to compile");
+        ap.refer(&mut output).add_option(&["-o", "--output"], StoreOption, "The file to output to");
+        ap.refer(&mut print_mir).add_option(&["--print-mir"],
+                                            StoreTrue,
+                                            "Pass if you would like to print the generated MIR");
+        ap.refer(&mut print_llir).add_option(&["--print-llir"],
+                                             StoreTrue,
+                                             "Pass if you would like to print the generated LLVM \
+                                              IR");
+        ap.refer(&mut opt).add_option(&["--opt", "-O"],
+                                      StoreTrue,
+                                      "Pass if you would like to optimize the generated LLVM IR");
 
         ap.parse_args_or_exit();
     }
@@ -59,8 +61,10 @@ fn main() {
     let output = output.unwrap_or(get_output_from_name(&name));
 
     let mut file = Vec::new();
-    std::fs::File::open(&name).expect(&name)
-        .read_to_end(&mut file).unwrap();
+    std::fs::File::open(&name)
+        .expect(&name)
+        .read_to_end(&mut file)
+        .unwrap();
     let file = String::from_utf8(file).unwrap();
     let lexer = Lexer::new(&file);
     let tyctxt = ty::TypeContext::new();
@@ -85,4 +89,4 @@ fn get_output_from_name(name: &str) -> String {
     format!("{}.s", name)
 }
 
-mod tests;
+// mod tests;

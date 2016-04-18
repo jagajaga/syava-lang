@@ -15,81 +15,81 @@ pub struct Ast<'t> {
 
 impl<'t> Ast<'t> {
     pub fn create(lexer: parse::Lexer, ctxt: &'t ty::TypeContext<'t>)
-            -> Result<Self, parse::ParserError> {
-        let mut parser = parse::Parser::new(lexer);
-        let mut functions = HashMap::new();
-        let mut function_types = HashMap::new();
+        -> Result<Self, parse::ParserError> {
+            let mut parser = parse::Parser::new(lexer);
+            let mut functions = HashMap::new();
+            let mut function_types = HashMap::new();
 
-        loop {
-            match parser.item(ctxt) {
-                Ok(Item::Function {
-                    name,
-                    ret,
-                    args,
-                    body,
-                }) => {
-                    let ty = ty::Function::new(
-                        args.iter().map(|&(_, t)| t).collect(), ret);
-                    let f = try!(Function::new(name.clone(), ret, args));
-                    function_types.insert(name.clone(), ty);
-                    if let Some(_) =
+            loop {
+                match parser.item(ctxt) {
+                    Ok(Item::Function {
+                        name,
+                        ret,
+                        args,
+                        body,
+                    }) => {
+                        let ty = ty::Function::new(
+                            args.iter().map(|&(_, t)| t).collect(), ret);
+                        let f = try!(Function::new(name.clone(), ret, args));
+                        function_types.insert(name.clone(), ty);
+                        if let Some(_) =
                             functions.insert(name.clone(), (f, body)) {
-                        return Err(parse::ParserError::DuplicatedFunction {
-                            function: name,
-                            compiler: fl!(),
-                        });
+                                return Err(parse::ParserError::DuplicatedFunction {
+                                    function: name,
+                                    compiler: fl!(),
+                                });
+                            }
                     }
+
+                    Err(parse::ParserError::ExpectedEof) => break,
+                    Err(e) => return Err(e),
                 }
-
-                Err(parse::ParserError::ExpectedEof) => break,
-                Err(e) => return Err(e),
             }
-        }
 
-        Ok(Ast {
-            functions: functions,
-            function_types: function_types,
-            ctxt: ctxt,
-        })
-    }
+            Ok(Ast {
+                functions: functions,
+                function_types: function_types,
+                ctxt: ctxt,
+            })
+        }
 
     pub fn typeck(mut self, opt: bool)
-            -> Result<mir::Mir<'t>, AstError<'t>> {
-        for (_, &mut (ref func, ref mut body))
+        -> Result<mir::Mir<'t>, AstError<'t>> {
+            for (_, &mut (ref func, ref mut body))
                 in self.functions.iter_mut() {
-            let mut uf = ty::UnionFind::new();
-            let mut vars = HashMap::<String, Type>::new();
-            try!(Expr::typeck_block(body, &self.ctxt, func.ret_ty,
-                &mut uf, &mut vars, func, &self.function_types));
-            try!(Expr::finalize_block_ty(body, &mut uf, func, &self.ctxt));
-        }
-        if let Some(&(ref f, _)) = self.functions.get("main") {
-            if *f.ret_ty.0 != ty::TypeVariant::SInt(ty::Int::I32) ||
-                    f.args.len() != 0 {
-                let mut input = Vec::new();
-                for (_, &(_, ty)) in &f.args {
-                    input.push(ty);
+                    let mut uf = ty::UnionFind::new();
+                    let mut vars = HashMap::<String, Type>::new();
+                    try!(Expr::typeck_block(body, &self.ctxt, func.ret_ty,
+                                            &mut uf, &mut vars, func, &self.function_types));
+                    try!(Expr::finalize_block_ty(body, &mut uf, func, &self.ctxt));
                 }
-                return Err(AstError::IncorrectMainType {
-                    input: input,
-                    output: f.ret_ty,
+            if let Some(&(ref f, _)) = self.functions.get("main") {
+                if *f.ret_ty.0 != ty::TypeVariant::SInt(ty::Int::I32) ||
+                    f.args.len() != 0 {
+                        let mut input = Vec::new();
+                        for (_, &(_, ty)) in &f.args {
+                            input.push(ty);
+                        }
+                        return Err(AstError::IncorrectMainType {
+                            input: input,
+                            output: f.ret_ty,
+                            compiler: fl!(),
+                        })
+                    }
+            } else {
+                return Err(AstError::FunctionDoesntExist {
+                    function: "main".to_owned(),
                     compiler: fl!(),
                 })
             }
-        } else {
-            return Err(AstError::FunctionDoesntExist {
-                function: "main".to_owned(),
-                compiler: fl!(),
-            })
+            let mut mir = mir::Mir::new(self.ctxt, opt);
+            let functions = std::mem::replace(&mut self.functions, HashMap::new());
+            for (name, (func, body)) in functions {
+                let mir_func = func.add_body(body, &mir, &self);
+                mir.add_function(name, mir_func);
+            }
+            Ok(mir)
         }
-        let mut mir = mir::Mir::new(self.ctxt, opt);
-        let functions = std::mem::replace(&mut self.functions, HashMap::new());
-        for (name, (func, body)) in functions {
-            let mir_func = func.add_body(body, &mir, &self);
-            mir.add_function(name, mir_func);
-        }
-        Ok(mir)
-    }
 }
 
 #[derive(Debug)]
@@ -169,49 +169,49 @@ pub struct Function<'t> {
 
 impl<'t> Function<'t> {
     fn new(name: String, ret_ty: Type<'t>, args: Vec<(String, Type<'t>)>)
-            -> Result<Function<'t>, parse::ParserError> {
-        let mut args_ty = Vec::new();
-        let mut args_hashmap = HashMap::new();
-        let mut arg_index = 0;
+        -> Result<Function<'t>, parse::ParserError> {
+            let mut args_ty = Vec::new();
+            let mut args_hashmap = HashMap::new();
+            let mut arg_index = 0;
 
 
-        for (arg_name, arg_ty) in args {
-            if !args_hashmap.contains_key(&arg_name) {
-                args_ty.push(arg_ty);
-                debug_assert!(
-                    args_hashmap.insert(arg_name, (arg_index, arg_ty))
-                    .is_none());
-                arg_index += 1;
-            } else {
-                return Err(parse::ParserError::DuplicatedFunctionArgument {
-                    argument: arg_name,
-                    function: name,
-                    compiler: fl!(),
-                });
+            for (arg_name, arg_ty) in args {
+                if !args_hashmap.contains_key(&arg_name) {
+                    args_ty.push(arg_ty);
+                    debug_assert!(
+                        args_hashmap.insert(arg_name, (arg_index, arg_ty))
+                        .is_none());
+                    arg_index += 1;
+                } else {
+                    return Err(parse::ParserError::DuplicatedFunctionArgument {
+                        argument: arg_name,
+                        function: name,
+                        compiler: fl!(),
+                    });
+                }
             }
+
+            let raw = mir::Function::new(ty::Function::new(args_ty, ret_ty));
+
+            Ok(Function {
+                name: name,
+                ret_ty: ret_ty,
+                args: args_hashmap,
+                raw: raw,
+            })
         }
-
-        let raw = mir::Function::new(ty::Function::new(args_ty, ret_ty));
-
-        Ok(Function {
-            name: name,
-            ret_ty: ret_ty,
-            args: args_hashmap,
-            raw: raw,
-        })
-    }
 
     fn add_body(mut self, body: Block<'t>, mir: &mir::Mir<'t>, ast: &Ast<'t>)
-            -> mir::Function<'t> {
-        let block = self.raw.start_block();
-        let mut locals = HashMap::new();
-        let (ret, blk) = Expr::translate_block(body, mir, &mut self, block,
-                &mut locals, &ast.function_types);
-        if let Some(blk) = blk {
-            blk.finish(&mut self.raw, ret);
+        -> mir::Function<'t> {
+            let block = self.raw.start_block();
+            let mut locals = HashMap::new();
+            let (ret, blk) = Expr::translate_block(body, mir, &mut self, block,
+                                                   &mut locals, &ast.function_types);
+            if let Some(blk) = blk {
+                blk.finish(&mut self.raw, ret);
+            }
+            self.raw
         }
-        self.raw
-    }
 }
 
 #[derive(Debug)]

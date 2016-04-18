@@ -36,10 +36,12 @@ impl<'t> PartialEq for Type<'t> {
     }
 }
 
-impl<'t> Eq for Type<'t> { }
+impl<'t> Eq for Type<'t> {}
 
 impl<'t> std::hash::Hash for Type<'t> {
-    fn hash<H>(&self, state: &mut H) where H: std::hash::Hasher {
+    fn hash<H>(&self, state: &mut H)
+        where H: std::hash::Hasher
+    {
         (self.0 as *const _).hash(state);
     }
 }
@@ -52,8 +54,7 @@ impl<'t> std::fmt::Debug for Type<'t> {
             TypeVariant::Bool => write!(f, "Bool"),
             TypeVariant::Unit => write!(f, "Unit"),
             TypeVariant::Diverging => write!(f, "Diverging"),
-            TypeVariant::Reference(inner) =>
-                write!(f, "Ref({:?})", inner),
+            TypeVariant::Reference(inner) => write!(f, "Ref({:?})", inner),
             TypeVariant::Infer(i) => write!(f, "Infer({:?})", i),
             TypeVariant::InferInt(i) => write!(f, "InferInt({:?})", i),
         }
@@ -135,62 +136,63 @@ impl<'t> Function<'t> {
     pub fn output(&self) -> Type<'t> {
         self.output
     }
-
 }
 
 impl<'t> Type<'t> {
     pub fn is_final_type(&self) -> bool {
         match *self.0 {
-            TypeVariant::SInt(_) | TypeVariant::UInt(_) | TypeVariant::Bool
-            | TypeVariant::Unit | TypeVariant::Diverging
-                => true,
+            TypeVariant::SInt(_) |
+            TypeVariant::UInt(_) |
+            TypeVariant::Bool |
+            TypeVariant::Unit |
+            TypeVariant::Diverging => true,
             TypeVariant::Reference(inner) => inner.is_final_type(),
             TypeVariant::Infer(_) | TypeVariant::InferInt(_) => false,
         }
     }
 
-    pub fn generate_inference_id(&mut self, uf: &mut UnionFind<'t>,
-            ctxt: &'t TypeContext<'t>) {
+    pub fn generate_inference_id(&mut self, uf: &mut UnionFind<'t>, ctxt: &'t TypeContext<'t>) {
         self.0 = self.get_inference_type(uf, ctxt);
     }
 
-    fn get_inference_type(&self, uf: &mut UnionFind<'t>,
-            ctxt: &'t TypeContext<'t>) -> &'t TypeVariant<'t> {
+    fn get_inference_type(&self,
+                          uf: &mut UnionFind<'t>,
+                          ctxt: &'t TypeContext<'t>)
+                          -> &'t TypeVariant<'t> {
         match *self.0 {
-            TypeVariant::Infer(None) => {
-                ctxt.get(TypeVariant::Infer(Some(uf.next_id())))
-            }
-            TypeVariant::InferInt(None) => {
-                ctxt.get(TypeVariant::InferInt(Some(uf.next_id())))
-            }
+            TypeVariant::Infer(None) => ctxt.get(TypeVariant::Infer(Some(uf.next_id()))),
+            TypeVariant::InferInt(None) => ctxt.get(TypeVariant::InferInt(Some(uf.next_id()))),
             TypeVariant::Reference(inner) => {
-                ctxt.get(TypeVariant::Reference(
-                    Type(inner.get_inference_type(uf, ctxt))
-                ))
+                ctxt.get(TypeVariant::Reference(Type(inner.get_inference_type(uf, ctxt))))
             }
-            ref t @ TypeVariant::SInt(_) | ref t @ TypeVariant::UInt(_)
-            | ref t @ TypeVariant::Bool | ref t @ TypeVariant::Diverging
-            | ref t @ TypeVariant::Unit | ref t @ TypeVariant::Infer(Some(_))
-            | ref t @ TypeVariant::InferInt(Some(_)) => t,
+            ref t @ TypeVariant::SInt(_) |
+            ref t @ TypeVariant::UInt(_) |
+            ref t @ TypeVariant::Bool |
+            ref t @ TypeVariant::Diverging |
+            ref t @ TypeVariant::Unit |
+            ref t @ TypeVariant::Infer(Some(_)) |
+            ref t @ TypeVariant::InferInt(Some(_)) => t,
         }
     }
 
-    pub fn finalize(&mut self, uf: &mut UnionFind<'t>,
-            ctxt: &'t TypeContext<'t>) -> Result<(), ()> {
+    pub fn finalize(&mut self,
+                    uf: &mut UnionFind<'t>,
+                    ctxt: &'t TypeContext<'t>)
+                    -> Result<(), ()> {
         *self = match self.get_final_ty(uf, ctxt) {
             Some(t) => t,
-            None => return Err(())
+            None => return Err(()),
         };
         Ok(())
     }
 
-    fn get_final_ty(&self, uf: &mut UnionFind<'t>, ctxt: &'t TypeContext<'t>)
-            -> Option<Type<'t>> {
+    fn get_final_ty(&self, uf: &mut UnionFind<'t>, ctxt: &'t TypeContext<'t>) -> Option<Type<'t>> {
         match *self.0 {
-            TypeVariant::SInt(_) | TypeVariant::UInt(_) | TypeVariant::Bool
-            | TypeVariant::Unit | TypeVariant::Diverging => {
-                Some(*self)
-            }
+            TypeVariant::SInt(_) |
+            TypeVariant::UInt(_) |
+            TypeVariant::Bool |
+            TypeVariant::Unit |
+            TypeVariant::Diverging => Some(*self),
             TypeVariant::Reference(inner) => {
                 match inner.get_final_ty(uf, ctxt) {
                     Some(inner) => Some(Type::ref_(inner, ctxt)),
@@ -285,35 +287,32 @@ impl<'t> UnionFind<'t> {
                     Ok(())
                 } else {
                     match (*a.0, *b.0) {
-                        (TypeVariant::Reference(lhs),
-                                TypeVariant::Reference(rhs)) => {
+                        (TypeVariant::Reference(lhs), TypeVariant::Reference(rhs)) => {
                             self.unify(lhs, rhs)
                         }
-                        _ => Err(())
+                        _ => Err(()),
                     }
                 }
             }
             (None, None) => {
                 match (*a.0, *b.0) {
+                    (TypeVariant::Infer(Some(lid)), TypeVariant::Infer(Some(rid))) |
                     (TypeVariant::Infer(Some(lid)),
-                            TypeVariant::Infer(Some(rid)))
-                    | (TypeVariant::Infer(Some(lid)),
-                            TypeVariant::InferInt(Some(rid)))
-                    | (TypeVariant::InferInt(Some(lid)),
-                            TypeVariant::Infer(Some(rid)))
-                    | (TypeVariant::InferInt(Some(lid)),
-                            TypeVariant::InferInt(Some(rid))) => {
+                     TypeVariant::InferInt(Some(rid))) |
+                    (TypeVariant::InferInt(Some(lid)),
+                     TypeVariant::Infer(Some(rid))) |
+                    (TypeVariant::InferInt(Some(lid)),
+                     TypeVariant::InferInt(Some(rid))) => {
                         self.union(lid, rid);
                         Ok(())
                     }
-                    (lhs @ TypeVariant::Infer(None), rhs)
-                    | (lhs @ TypeVariant::InferInt(None), rhs)
-                    | (rhs, lhs @ TypeVariant::Infer(None))
-                    | (lhs, rhs @ TypeVariant::InferInt(None)) =>
-                        panic!("ICE: attempted to unify {:?} with {:?}",
-                            lhs, rhs),
-                    (l, r)
-                        => panic!("actual ty isn't working: {:?}, {:?}", l, r)
+                    (lhs @ TypeVariant::Infer(None), rhs) |
+                    (lhs @ TypeVariant::InferInt(None), rhs) |
+                    (rhs, lhs @ TypeVariant::Infer(None)) |
+                    (lhs, rhs @ TypeVariant::InferInt(None)) => {
+                        panic!("ICE: attempted to unify {:?} with {:?}", lhs, rhs)
+                    }
+                    (l, r) => panic!("actual ty isn't working: {:?}, {:?}", l, r),
                 }
             }
             (Some(ty), None) => {
@@ -330,16 +329,14 @@ impl<'t> UnionFind<'t> {
                                 self.parents_ty[id] = Some(ty);
                                 Ok(())
                             }
-                            _ => {
-                                Err(())
-                            }
+                            _ => Err(()),
                         }
                     }
-                    t @ TypeVariant::Infer(None)
-                    | t @ TypeVariant::InferInt(None) =>
-                        panic!("ICE: attempted to unify {:?} with {:?}",
-                            ty, t),
-                    t => panic!("ICE: resolve isn't working: {:?}", t)
+                    t @ TypeVariant::Infer(None) |
+                    t @ TypeVariant::InferInt(None) => {
+                        panic!("ICE: attempted to unify {:?} with {:?}", ty, t)
+                    }
+                    t => panic!("ICE: resolve isn't working: {:?}", t),
                 }
             }
             (None, Some(ty)) => {
@@ -356,16 +353,14 @@ impl<'t> UnionFind<'t> {
                                 self.parents_ty[id] = Some(ty);
                                 Ok(())
                             }
-                            _ => {
-                                Err(())
-                            }
+                            _ => Err(()),
                         }
                     }
-                    t @ TypeVariant::Infer(None)
-                    | t @ TypeVariant::InferInt(None) =>
-                        panic!("ICE: attempted to unify {:?} with {:?}",
-                            ty, t),
-                    t => panic!("ICE: resolve isn't working: {:?}", t)
+                    t @ TypeVariant::Infer(None) |
+                    t @ TypeVariant::InferInt(None) => {
+                        panic!("ICE: attempted to unify {:?} with {:?}", ty, t)
+                    }
+                    t => panic!("ICE: resolve isn't working: {:?}", t),
                 }
             }
         }
@@ -377,11 +372,9 @@ impl<'t> UnionFind<'t> {
                 self.parents_ty[self.find(id) as usize]
             }
 
-            TypeVariant::Infer(None) | TypeVariant::InferInt(None) => {
-                None
-            }
+            TypeVariant::Infer(None) | TypeVariant::InferInt(None) => None,
 
-            _ => Some(ty)
+            _ => Some(ty),
         }
     }
 
