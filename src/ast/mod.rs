@@ -53,7 +53,7 @@ impl<'t> Ast<'t> {
         })
     }
 
-    pub fn typeck(mut self)
+    pub fn typeck(mut self, opt: bool)
             -> Result<mir::Mir<'t>, AstError<'t>> {
         for (_, &mut (ref func, ref mut body))
                 in self.functions.iter_mut() {
@@ -63,10 +63,11 @@ impl<'t> Ast<'t> {
                 &mut uf, &mut vars, func, &self.function_types));
             try!(Expr::finalize_block_ty(body, &mut uf, func, &self.ctxt));
         }
-        let mut mir = mir::Mir::new(self.ctxt);
+        let mut mir = mir::Mir::new(self.ctxt, opt);
         let functions = std::mem::replace(&mut self.functions, HashMap::new());
         for (name, (func, body)) in functions {
-            mir.add_function(name, func.add_body(body, &self.ctxt, &self));
+            let mir_func = func.add_body(body, &mir, &self);
+            mir.add_function(name, mir_func);
         }
         Ok(mir)
     }
@@ -173,11 +174,11 @@ impl<'t> Function<'t> {
         })
     }
 
-    fn add_body(mut self, body: Block<'t>, ctxt: &'t ty::TypeContext<'t>,
-            ast: &Ast<'t>) -> mir::Function<'t> {
+    fn add_body(mut self, body: Block<'t>, mir: &mir::Mir<'t>, ast: &Ast<'t>)
+            -> mir::Function<'t> {
         let block = self.raw.start_block();
         let mut locals = HashMap::new();
-        let (ret, blk) = Expr::translate_block(body, ctxt, &mut self, block,
+        let (ret, blk) = Expr::translate_block(body, mir, &mut self, block,
                 &mut locals, &ast.function_types);
         if let Some(blk) = blk {
             blk.finish(&mut self.raw, ret);

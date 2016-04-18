@@ -69,7 +69,7 @@ fn main() {
         Ok(ast) => ast,
         Err(e) => panic!("\n{:#?}", e),
     };
-    let mir = match ast.typeck() {
+    let mir = match ast.typeck(opt) {
         Ok(mir) => mir,
         Err(e) => panic!("\n{:#?}", e),
     };
@@ -77,7 +77,7 @@ fn main() {
         println!("{}", mir);
     }
 
-    mir.build(&output, print_llir, opt)
+    mir.build_and_write(&output, print_llir)
 }
 
 // TODO: take off the ".sva" of the input file

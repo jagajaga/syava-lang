@@ -2,8 +2,6 @@ use std;
 use std::collections::HashMap;
 use std::cell::RefCell;
 use typed_arena::Arena;
-use llvm_sys::prelude::*;
-use llvm_sys::core::*;
 
 pub struct TypeContext<'t> {
     backing_store: Arena<TypeVariant<'t>>,
@@ -138,54 +136,9 @@ impl<'t> Function<'t> {
         self.output
     }
 
-    pub fn to_llvm(&self) -> LLVMTypeRef {
-        unsafe {
-            let mut args = self.input.iter().map(|a| a.to_llvm())
-                .collect::<Vec<_>>();
-            LLVMFunctionType(self.output.to_llvm_ret(), args.as_mut_ptr(),
-                args.len() as u32, false as LLVMBool)
-        }
-    }
 }
 
 impl<'t> Type<'t> {
-    pub fn to_llvm(&self) -> LLVMTypeRef {
-        unsafe {
-            match *self.0 {
-                TypeVariant::SInt(ref size) | TypeVariant::UInt(ref size)
-                    => LLVMIntType(size.size()),
-                TypeVariant::Bool => LLVMInt1Type(),
-                TypeVariant::Unit => LLVMStructType(std::ptr::null_mut(), 0,
-                        false as LLVMBool),
-                TypeVariant::Reference(inner) =>
-                    LLVMPointerType(inner.to_llvm(), 0),
-                TypeVariant::Diverging
-                    => panic!("ICE: Attempted to get the LLVM type of \
-                        Diverging"),
-                TypeVariant::Infer(_) | TypeVariant::InferInt(_) =>
-                    panic!("ICE: Attempted to get the LLVM type of an \
-                        inference variable: {:?}", self),
-            }
-        }
-    }
-
-    pub fn to_llvm_ret(&self) -> LLVMTypeRef {
-        unsafe {
-            match *self.0 {
-                TypeVariant::SInt(ref size) | TypeVariant::UInt(ref size) =>
-                    LLVMIntType(size.size()),
-                TypeVariant::Bool => LLVMInt1Type(),
-                TypeVariant::Unit => LLVMVoidType(),
-                TypeVariant::Reference(inner) =>
-                    LLVMPointerType(inner.to_llvm(), 0),
-                TypeVariant::Diverging => LLVMVoidType(),
-                TypeVariant::Infer(_) | TypeVariant::InferInt(_) =>
-                    panic!("ICE: Attempted to get the LLVM return type of an \
-                        inference variable"),
-            }
-        }
-    }
-
     pub fn is_final_type(&self) -> bool {
         match *self.0 {
             TypeVariant::SInt(_) | TypeVariant::UInt(_) | TypeVariant::Bool
