@@ -1,0 +1,22 @@
+// returns 89
+fn main() -> s32 {
+    fib(10 + 5)
+}
+
+//returns the nth fibonacci number
+fn fib(n: s32) -> s32 {
+    let x = if fib_base(n) {
+        return return return 1; // return is Diverging, so it can 
+                                // be coerced to any type
+    } else {
+        let y = fib(n - 1);
+        let z = fib(n - 2);
+        y + z
+    };
+
+    return x;
+}
+
+fn fib_base(n: s32) -> bool {
+    n == 0 || n == 1
+}

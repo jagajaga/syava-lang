@@ -88,5 +88,3 @@ fn main() {
 fn get_output_from_name(name: &str) -> String {
     format!("{}.s", name)
 }
-
-// mod tests;

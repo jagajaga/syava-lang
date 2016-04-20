@@ -1,0 +1,7 @@
+fn main() -> s32 {
+    deref(&0)
+}
+
+fn deref(x: &s32) -> s32 {
+    **&x + 1
+}

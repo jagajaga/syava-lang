@@ -1,0 +1,55 @@
+/*
+// returns 89
+fn main() -> s32 {
+    if fib(10 + 5) == fib2(15) {
+        fib3(10)
+    } else {
+        !0
+    }
+}
+
+//returns the nth fibonacci number
+fn fib(n: s32) -> s32 {
+    if fib_base(n) {
+        return return 1;
+    } else {
+        let y = fib(n - 1);
+        let z = fib(n - 2);
+        y + z
+    }
+}
+
+fn fib2(n: s32) -> s32 {
+    if fib_base(n) {
+        return return 1;
+    }
+
+    {
+        let y = fib(n - 1);
+        let z = fib(n - 2);
+        y + z
+    }
+}
+
+fn fib3(n: s32) -> s32 {
+    let x;
+    if fib_base(n) {
+        x = 1;
+    } else {
+        x = fib(n - 1) + fib(n - 2);
+    }
+    x
+}
+
+fn fib_base(n: s32) -> bool {
+    n == 0 || n == 1
+}
+*/
+
+fn main() -> s32 {
+    test()
+}
+
+fn test() -> s32 {
+    0
+}

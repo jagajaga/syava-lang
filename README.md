@@ -16,12 +16,13 @@ Current features:
 - [x] if
 - [x] Numbers
 - [x] Void
+- [x] Pointers
+- [x] &
+- [x] Return last statement
+- [x] Hindley-Milner type inference
+- [x] LLVM optimizations
+- [x] Local variables
 Etc
-
-Future plans:
-- [ ] Pointers
-- [ ] &
-- [ ] Return last statement
 
 ### Building
 You will need `rust-nightly` and `cargo`.
@@ -33,14 +34,7 @@ cargo build
 
 ### Testing
 
-```
-RUST_TEST_THREADS=1 cargo test
-```
-
-If you want manual testing run
-```
-cargo run <path_to_testing_source>
-```
+Go to `tests` directory and run `test.sh`
 
 ### Examples
 

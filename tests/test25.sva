@@ -1,0 +1,20 @@
+// returns 89
+fn main() -> s32 {
+    fib(10);
+    return fib(10);
+}
+
+//returns the nth fibonacci number
+fn fib(n: s32) -> s32 {
+    let x = if fib_base(n) {
+        return return return 1
+    } else {
+        fib(n - 1) + fib(n - 2)
+    };
+    return x;
+    return false; // after a return stmt, so not checked
+}
+
+fn fib_base(n: s32) -> bool {
+    n == 0 || n == 1
+}
